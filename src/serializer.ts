@@ -414,7 +414,7 @@ function serializeToolResultMessage<TApi extends Api>(
 	message: ToolResultMessage,
 	model: Model<TApi>,
 ): ResponsesFunctionCallOutputItem {
-	const [callId] = message.toolCallId.split("|");
+	const [callId] = (message.toolCallId ?? "").split("|");
 	const textOutput = message.content
 		.filter((item): item is TextContent => item.type === "text")
 		.map((item) => sanitizeSurrogates(item.text))
