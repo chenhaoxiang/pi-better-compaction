@@ -17,6 +17,7 @@ type NativeCompactionFailureReason =
 	| "unsupported-api"
 	| "missing-base-url"
 	| "missing-api-key"
+	| "auth-resolution-failed"
 	| "unsupported-payload"
 	| "payload-model-mismatch";
 
@@ -241,7 +242,15 @@ export async function resolveNativeCompactionEnvironment(
 		requestPayload = payload;
 	}
 
-	const { apiKey, headers, baseUrl: authBaseUrl } = await resolveRequestAuth(ctx, currentModel);
+	let resolvedAuth: Awaited<ReturnType<typeof resolveRequestAuth>>;
+	try {
+		resolvedAuth = await resolveRequestAuth(ctx, currentModel);
+	} catch {
+		// Auth lookup failures should take the configured text fallback before a
+		// checkpoint exists, or the explicit abort gate when one already exists.
+		return { ok: false, reason: "auth-resolution-failed", ...descriptor };
+	}
+	const { apiKey, headers, baseUrl: authBaseUrl } = resolvedAuth;
 	// OAuth can route a configured Individual model to an Enterprise endpoint.
 	// Use the same resolved endpoint for transport AND persisted replay identity.
 	const baseUrl = normalizeBaseUrl(authBaseUrl) ?? descriptor.baseUrl;

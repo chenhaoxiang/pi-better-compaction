@@ -58,6 +58,10 @@ When the current request is expected to replay a native checkpoint but its envir
 - **WHEN** a native-model provider request cannot be aligned with the persisted checkpoint
 - **THEN** that request is visibly aborted and the checkpoint remains intact for later recovery.
 
+#### Scenario: Extension disabled after an opaque checkpoint
+- **WHEN** the extension is disabled while an opaque-only checkpoint remains in the active session
+- **THEN** it stops new compaction but still aborts a request that would send the placeholder as history.
+
 ### Requirement: Native compaction usage accounting
 The extension SHALL include provider-reported native-compaction usage in the Pi compaction result when valid usage is available, using Pi's usage shape and the active model's pricing. It SHALL not fabricate usage when the provider omits it. Usage from an on-demand portable summary SHALL remain explicitly attributable even if the current public extension API cannot add it to Pi's own session totals.
 

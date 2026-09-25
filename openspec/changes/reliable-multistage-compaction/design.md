@@ -33,4 +33,4 @@ See proposal.md and specs/reliable-compaction/spec.md. The fork now requires Pi 
 
 1. Raise the fork peer requirement to Pi 0.87.1+, then add the high-priority spec, characterization tests, implementation, and independent Kimi K3 review in an isolated worktree. Run offline tests and the abort loopback gate; merge into fork main only if no blocker, then pin the local Pi package to the exact merge SHA.
 2. Base the medium-priority worktree on the fresh fork main; repeat tests/review/PR/merge/install. Keep upstream PR #7 and npm publication outside this initiative.
-3. Rollback is repinning Pi to the last known-good fork commit `af0af24aef85a398872a5ffb50de7fbecdfc84d5`, without touching session files or another user's work.
+3. Rollback is not a blind global repin: the older `af0af24aef85a398872a5ffb50de7fbecdfc84d5` version lacks the opaque-placeholder guard. Only repin for sessions without a dependent native checkpoint, or after verifying a durable portable continuation; otherwise keep this version for that session or stop it. Never rewrite session files or another user's work as part of rollback.

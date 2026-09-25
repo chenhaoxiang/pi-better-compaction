@@ -1,6 +1,8 @@
 import type {
 	BeforeProviderRequestEvent,
 	CompactionResult,
+	ContextEvent,
+	SessionEntry,
 	ExtensionAPI,
 	ExtensionContext,
 	SessionBeforeCompactEvent,
@@ -9,8 +11,10 @@ import { executeNativeCompaction } from "./compact-client";
 import { executeV2Compaction } from "./compact-client-v2";
 import { loadExtensionConfig } from "./config";
 import { redactValue, writeDebugArtifact } from "./debug";
-import { resolveLatestNativeCompactionEntry } from "./details-store";
+import { findLatestCompactionEntry, isPersistedNativeCompactionEntry, resolveLatestNativeCompactionEntry } from "./details-store";
 import { runNativeFallbackCompaction } from "./native-fallback";
+import { reconstructPortableHistory } from "./portable-history";
+import { summarizePortableHistory } from "./portable-summary";
 import {
 	rewriteResponsesPayloadWithNativeReplay,
 	serializeLiveTailToResponsesInput,
@@ -27,10 +31,12 @@ import { mapResponsesCompactionUsage } from "./usage";
 import {
 	createNativeCompactionDetails,
 	createNativeCompactionResult,
+	DEFAULT_EXTENSION_CONFIG,
 	EXTENSION_ID,
 	isNativeCompactionDetails,
 	NATIVE_COMPACTION_STRATEGY,
 	NATIVE_COMPACTION_STRATEGY_V2,
+	NATIVE_COMPACTION_FALLBACK_SUMMARY,
 	type ExtensionConfig,
 	type NativeCompactionDetails,
 	type NativeCompactionRequestMeta,
@@ -46,6 +52,7 @@ export type ExtensionRuntimeDependencies = {
 	executeNativeCompaction: typeof executeNativeCompaction;
 	executeV2Compaction: typeof executeV2Compaction;
 	runNativeFallbackCompaction: typeof runNativeFallbackCompaction;
+	summarizePortableHistory: typeof summarizePortableHistory;
 };
 
 const DEFAULT_DEPENDENCIES: ExtensionRuntimeDependencies = {
@@ -53,6 +60,7 @@ const DEFAULT_DEPENDENCIES: ExtensionRuntimeDependencies = {
 	executeNativeCompaction,
 	executeV2Compaction,
 	runNativeFallbackCompaction,
+	summarizePortableHistory,
 };
 
 function buildCompactionRequestMeta(event: SessionBeforeCompactEvent): NativeCompactionRequestMeta {
@@ -536,15 +544,146 @@ async function handleSessionBeforeCompact(
 	return undefined;
 }
 
+const PORTABLE_SUMMARY_ENTRY_TYPE = "pi-better-compaction-portable-summary";
+const PORTABLE_USAGE_ENTRY_TYPE = "pi-better-compaction-portable-usage";
+
+function latestOpaqueMarker(branch: readonly SessionEntry[]) {
+	const latest = findLatestCompactionEntry(branch);
+	return latest?.summary === NATIVE_COMPACTION_FALLBACK_SUMMARY ? latest : undefined;
+}
+
+function latestOpaqueCheckpoint(branch: readonly SessionEntry[]) {
+	const latest = latestOpaqueMarker(branch);
+	return latest && isPersistedNativeCompactionEntry(latest) ? latest : undefined;
+}
+
+function cachedPortableSummary(branch: readonly SessionEntry[], checkpointId: string, sourceDigest: string): string | undefined {
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry?.type !== "custom" || entry.customType !== PORTABLE_SUMMARY_ENTRY_TYPE ||
+			!entry.data || typeof entry.data !== "object" || Array.isArray(entry.data)) continue;
+		const data = entry.data as Record<string, unknown>;
+		if (data.compactionEntryId === checkpointId && data.sourceDigest === sourceDigest &&
+			typeof data.summary === "string" && data.summary.trim()) return data.summary;
+	}
+	return undefined;
+}
+
+function hasCurrentPortableSummary(branch: readonly SessionEntry[], checkpoint: NonNullable<ReturnType<typeof latestOpaqueCheckpoint>>): boolean {
+	const source = reconstructPortableHistory(branch, checkpoint);
+	return source.ok && Boolean(cachedPortableSummary(branch, checkpoint.id, source.sourceDigest));
+}
+
+function matchesCheckpointModel(ctx: ExtensionContext, checkpoint: ReturnType<typeof latestOpaqueCheckpoint>): boolean {
+	const model = ctx.model;
+	const details = checkpoint?.details;
+	if (!model || !details) return false;
+	return model.provider === details.provider && model.api === details.api && model.id === details.model;
+}
+
+function abortOpaqueRequest(ctx: ExtensionContext, config: ExtensionConfig, reason: string): void {
+	// Abort first: Pi reports and ignores hook errors, so a broken UI or debug
+	// filesystem must never turn this safety gate into a normal provider request.
+	ctx.abort();
+	try { notifyWarning(ctx, `portable compaction unavailable (${reason}); request aborted to protect history`); }
+	catch { /* The abort signal is already set. */ }
+	try { writeDebugArtifact("compaction-event", { event: "opaque-continuity-blocked", reason }, config, ctx); }
+	catch { /* Debug output is best-effort after the safety action. */ }
+}
+
+function payloadHasOpaquePlaceholder(payload: unknown): boolean {
+	try { return JSON.stringify(payload).includes(NATIVE_COMPACTION_FALLBACK_SUMMARY); }
+	catch { return true; }
+}
+
+async function handlePortableContext(
+	event: ContextEvent,
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+	dependencies: ExtensionRuntimeDependencies,
+) {
+	const { config } = dependencies.loadExtensionConfig();
+	const branch = ctx.sessionManager.getBranch();
+	const opaqueMarker = latestOpaqueMarker(branch);
+	const checkpoint = latestOpaqueCheckpoint(branch);
+	if (opaqueMarker && !checkpoint) {
+		abortOpaqueRequest(ctx, config, "invalid-native-details");
+		return undefined;
+	}
+	if (!checkpoint || matchesCheckpointModel(ctx, checkpoint)) return undefined;
+	if (!config.enabled || !event.messages.some((message) =>
+		message.role === "compactionSummary" && message.summary === NATIVE_COMPACTION_FALLBACK_SUMMARY,
+	)) {
+		abortOpaqueRequest(ctx, config, config.enabled ? "missing-placeholder-boundary" : "extension-disabled");
+		return undefined;
+	}
+
+	try {
+		const source = reconstructPortableHistory(branch, checkpoint);
+		if (!source.ok) {
+			abortOpaqueRequest(ctx, config, source.reason);
+			return undefined;
+		}
+		let summary = cachedPortableSummary(branch, checkpoint.id, source.sourceDigest);
+		if (!summary) {
+			const result = await dependencies.summarizePortableHistory({
+				messages: source.messages,
+				ctx,
+				config,
+				signal: ctx.signal,
+				sessionId: getSessionId(ctx),
+			});
+			if (!result.ok) {
+				if (result.usageRecords.length > 0) {
+					try { pi.appendEntry(PORTABLE_USAGE_ENTRY_TYPE, {
+						compactionEntryId: checkpoint.id, usageRecords: result.usageRecords,
+						reason: result.reason, createdAt: new Date().toISOString(),
+					}); } catch { /* Abort still takes precedence over usage evidence. */ }
+				}
+				abortOpaqueRequest(ctx, config, result.reason);
+				return undefined;
+			}
+			summary = result.summary;
+			pi.appendEntry(PORTABLE_SUMMARY_ENTRY_TYPE, {
+				compactionEntryId: checkpoint.id,
+				sourceDigest: source.sourceDigest,
+				summary,
+				model: result.model,
+				usageRecords: result.usageRecords,
+				createdAt: new Date().toISOString(),
+			});
+		}
+		return { messages: event.messages.map((message) =>
+			message.role === "compactionSummary" && message.summary === NATIVE_COMPACTION_FALLBACK_SUMMARY
+				? { ...message, summary }
+				: message,
+		) };
+	} catch {
+		// Pi reports and ignores handler exceptions. An explicit abort is required.
+		abortOpaqueRequest(ctx, config, "portable-summary-error");
+		return undefined;
+	}
+}
+
 async function handleBeforeProviderRequest(
 	event: BeforeProviderRequestEvent,
 	ctx: ExtensionContext,
 	dependencies: ExtensionRuntimeDependencies,
 ) {
 	const { config } = dependencies.loadExtensionConfig();
-	if (!config.enabled) {
+	const branchEntries = ctx.sessionManager.getBranch();
+	const opaqueMarker = latestOpaqueMarker(branchEntries);
+	const opaqueCheckpoint = latestOpaqueCheckpoint(branchEntries);
+	if (opaqueMarker && !opaqueCheckpoint) {
+		abortOpaqueRequest(ctx, config, "invalid-native-details");
 		return undefined;
 	}
+	const placeholderOnWire = opaqueCheckpoint && payloadHasOpaquePlaceholder(event.payload);
+	if (!config.enabled) {
+		if (placeholderOnWire) abortOpaqueRequest(ctx, config, "extension-disabled-with-native-checkpoint");
+		return undefined;
+	}
+	if (ctx.signal?.aborted) return undefined;
 
 	// Capture compact-relevant request fields (tools, reasoning, ...) for the next
 	// /responses/compact call, regardless of whether this request gets rewritten.
@@ -561,6 +700,11 @@ async function handleBeforeProviderRequest(
 		event.payload,
 	);
 	if (resolution.ok === false) {
+		if (opaqueCheckpoint && (placeholderOnWire || matchesCheckpointModel(ctx, opaqueCheckpoint) ||
+			!hasCurrentPortableSummary(branchEntries, opaqueCheckpoint))) {
+			abortOpaqueRequest(ctx, config, `native-environment-${resolution.reason}`);
+			return undefined;
+		}
 		writeDebugArtifact(
 			"provider-request",
 			{
@@ -580,7 +724,6 @@ async function handleBeforeProviderRequest(
 	}
 
 	const runtime = resolution.runtime;
-	const branchEntries = ctx.sessionManager.getBranch();
 	const latestNativeCompaction = resolveLatestNativeCompactionEntry(branchEntries, {
 		provider: runtime.provider,
 		api: runtime.api,
@@ -588,6 +731,10 @@ async function handleBeforeProviderRequest(
 		baseUrl: runtime.baseUrl,
 	});
 	if (!latestNativeCompaction.ok) {
+		if (opaqueCheckpoint && (placeholderOnWire || !hasCurrentPortableSummary(branchEntries, opaqueCheckpoint))) {
+			abortOpaqueRequest(ctx, config, `native-replay-${latestNativeCompaction.reason}`);
+			return undefined;
+		}
 		writeDebugArtifact(
 			"provider-request",
 			{
@@ -616,6 +763,10 @@ async function handleBeforeProviderRequest(
 		compactionEntry: latestNativeCompactionEntry,
 	});
 	if (!rewrite.ok) {
+		if (opaqueCheckpoint) {
+			abortOpaqueRequest(ctx, config, `native-rewrite-${rewrite.reason}`);
+			return undefined;
+		}
 		writeDebugArtifact(
 			"provider-request",
 			{
@@ -635,31 +786,33 @@ async function handleBeforeProviderRequest(
 		return undefined;
 	}
 
-	writeDebugArtifact(
-		"provider-request",
-		{
-			event: "before_provider_request.native-rewrite",
-			provider: runtime.provider,
-			api: runtime.api,
-			model: runtime.model,
-			baseUrl: runtime.baseUrl,
-			compactionEntryId: latestNativeCompactionEntry.id,
-			boundaryIndex: rewrite.segments.boundaryIndex,
-			firstKeptEntryIndex: rewrite.segments.firstKeptEntryIndex,
-			originalInputItems: runtime.payload.input.length,
-			rewrittenInputItems: rewrite.rewrittenPayload.input.length,
-			freshPreambleItems: rewrite.segments.freshPreamble.length,
-			trailingPreambleItems: rewrite.segments.trailingPreamble.length,
-			compactionSummaryItems: rewrite.segments.compactionSummary.length,
-			preCompactionKeptItems: rewrite.segments.preCompactionKeptWindow.input.length,
-			compactedItems: rewrite.segments.compactedWindow.length,
-			postCompactionTailItems: rewrite.segments.postCompactionTail.input.length,
-			payload: rewrite.rewrittenPayload,
-			originalPayload: runtime.payload,
-		},
-		config,
-		ctx,
-	);
+	try {
+		writeDebugArtifact(
+			"provider-request",
+			{
+				event: "before_provider_request.native-rewrite",
+				provider: runtime.provider,
+				api: runtime.api,
+				model: runtime.model,
+				baseUrl: runtime.baseUrl,
+				compactionEntryId: latestNativeCompactionEntry.id,
+				boundaryIndex: rewrite.segments.boundaryIndex,
+				firstKeptEntryIndex: rewrite.segments.firstKeptEntryIndex,
+				originalInputItems: runtime.payload.input.length,
+				rewrittenInputItems: rewrite.rewrittenPayload.input.length,
+				freshPreambleItems: rewrite.segments.freshPreamble.length,
+				trailingPreambleItems: rewrite.segments.trailingPreamble.length,
+				compactionSummaryItems: rewrite.segments.compactionSummary.length,
+				preCompactionKeptItems: rewrite.segments.preCompactionKeptWindow.input.length,
+				compactedItems: rewrite.segments.compactedWindow.length,
+				postCompactionTailItems: rewrite.segments.postCompactionTail.input.length,
+				payload: rewrite.rewrittenPayload,
+				originalPayload: runtime.payload,
+			},
+			config,
+			ctx,
+		);
+	} catch { /* Diagnostic storage must not discard a valid native replay. */ }
 
 	return rewrite.rewrittenPayload;
 }
@@ -701,9 +854,38 @@ export function registerExtensionRuntime(
 	pi.on("session_before_compact", (event, ctx) =>
 		handleSessionBeforeCompact(event, ctx, dependencies),
 	);
-	pi.on("before_provider_request", (event, ctx) =>
-		handleBeforeProviderRequest(event, ctx, dependencies),
-	);
+	pi.on("context", async (event, ctx) => {
+		try { return await handlePortableContext(event, ctx, pi, dependencies); }
+		catch (error) {
+			if (!event.messages.some((message) =>
+				message.role === "compactionSummary" && message.summary === NATIVE_COMPACTION_FALLBACK_SUMMARY,
+			)) throw error;
+			abortOpaqueRequest(ctx, DEFAULT_EXTENSION_CONFIG, "unexpected-context-hook-error");
+			return undefined;
+		}
+	});
+	pi.on("cache_warming_decision", (_event, ctx) => {
+		try {
+			const branch = ctx.sessionManager.getBranch();
+			const opaqueMarker = latestOpaqueMarker(branch);
+			const checkpoint = latestOpaqueCheckpoint(branch);
+			if (opaqueMarker && !checkpoint) return { action: "stop" as const };
+			if (!checkpoint || matchesCheckpointModel(ctx, checkpoint)) return undefined;
+			const source = reconstructPortableHistory(branch, checkpoint);
+			return source.ok && cachedPortableSummary(branch, checkpoint.id, source.sourceDigest)
+				? undefined : { action: "stop" as const };
+		} catch { return { action: "stop" as const }; }
+	});
+	pi.on("before_provider_request", async (event, ctx) => {
+		try { return await handleBeforeProviderRequest(event, ctx, dependencies); }
+		catch (error) {
+			// Pi reports handler errors but otherwise sends the unmodified payload.
+			// Never permit that behavior while it still contains our opaque marker.
+			if (!payloadHasOpaquePlaceholder(event.payload)) throw error;
+			abortOpaqueRequest(ctx, DEFAULT_EXTENSION_CONFIG, "unexpected-provider-hook-error");
+			return undefined;
+		}
+	});
 
 	pi.on("session_compact_failed", (event, ctx) => {
 		const { config } = dependencies.loadExtensionConfig();

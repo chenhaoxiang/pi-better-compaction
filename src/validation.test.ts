@@ -266,12 +266,16 @@ function createContext(args: {
 	sessionContextMessages?: Record<string, unknown>[];
 	registryModels?: Array<{ provider: string; id: string }>;
 	authBaseUrl?: string;
+	authThrows?: boolean;
 } = {}) {
 	const branchEntries = args.branchEntries ?? [];
 	const model = args.model ?? defaultModel;
 	const sessionContextMessages =
 		args.sessionContextMessages ?? branchEntries.filter((entry) => entry.type === "message").map(toReplayMessage);
+	let abortCount = 0;
 	return {
+		get abortCount() { return abortCount; },
+		abort: () => { abortCount++; },
 		cwd: "/tmp/pi-better-compaction-validation",
 		hasUI: false,
 		getSystemPrompt: () => args.systemPrompt ?? "Current instructions v1",
@@ -279,7 +283,10 @@ function createContext(args: {
 		modelRegistry: {
 			find: (provider: string, modelId: string) =>
 				(args.registryModels ?? []).find((entry) => entry.provider === provider && entry.id === modelId),
-			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test-native-compaction", baseUrl: args.authBaseUrl }),
+			getApiKeyAndHeaders: async () => {
+				if (args.authThrows) throw new Error("synthetic auth resolution failure");
+				return { ok: true, apiKey: "sk-test-native-compaction", baseUrl: args.authBaseUrl };
+			},
 		},
 		sessionManager: {
 			getBranch: () => branchEntries,
@@ -906,7 +913,7 @@ test("a second compaction replays only the latest compacted window and keeps fre
 	expect(JSON.stringify(rewritten.input)).not.toContain("Interim question between compactions.");
 });
 
-test("unsupported model/provider switching fails open instead of replaying stale native state", async () => {
+test("unsupported model/provider switching aborts rather than sending opaque-only history", async () => {
 	const { beforeProviderRequest } = await loadHookHarness();
 	const matchingModel = { ...defaultModel };
 	const switchedModel = {
@@ -938,17 +945,17 @@ test("unsupported model/provider switching fails open instead of replaying stale
 		instructions: "Instructions after switching back",
 		input: [{ role: "developer", content: "Fresh preamble after switching back" }],
 	};
-	const mismatchedLatestResult = await beforeProviderRequest(
-		{ payload: matchingPayload },
-		createContext({ branchEntries, model: matchingModel, systemPrompt: matchingPayload.instructions }),
-	);
+	const matchingCtx = createContext({ branchEntries, model: matchingModel, systemPrompt: matchingPayload.instructions });
+	const unsupportedCtx = createContext({ branchEntries, model: unsupportedProviderModel, systemPrompt: matchingPayload.instructions });
+	const mismatchedLatestResult = await beforeProviderRequest({ payload: matchingPayload }, matchingCtx);
 	const unsupportedProviderResult = await beforeProviderRequest(
-		{ payload: { ...matchingPayload, model: unsupportedProviderModel.id } },
-		createContext({ branchEntries, model: unsupportedProviderModel, systemPrompt: matchingPayload.instructions }),
+		{ payload: { ...matchingPayload, model: unsupportedProviderModel.id } }, unsupportedCtx,
 	);
 
 	expect(mismatchedLatestResult).toBeUndefined();
 	expect(unsupportedProviderResult).toBeUndefined();
+	expect(matchingCtx.abortCount).toBe(1);
+	expect(unsupportedCtx.abortCount).toBe(1);
 });
 
 test("responses compact failure falls back to the configured native model and returns its result", async () => {
@@ -1309,6 +1316,23 @@ test("an unset or same-as-current primary still reaches an explicitly configured
 	}
 });
 
+test("native auth resolution failure enters the configured text fallback chain", async () => {
+	const user = createUserEntry("auth-error-user", "Keep the task state.");
+	const portable = { summary: "## Goal\nRecovered by text fallback.", firstKeptEntryId: user.id, tokensBefore: 512 };
+	const { sessionBeforeCompact, v2CompactCalls, fallbackCalls } = await loadHookHarness({
+		config: { compactionModel: "codex-local/kimi-k3" },
+		nativeFallbackResult: { ok: true, result: portable, model: { provider: "codex-local", id: "kimi-k3" } },
+	});
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	const result = await sessionBeforeCompact(event, createContext({ authThrows: true, sessionContextMessages: [toReplayMessage(user)] })) as { compaction: unknown };
+	expect(result.compaction).toEqual(portable);
+	expect(v2CompactCalls).toHaveLength(0);
+	expect(fallbackCalls).toHaveLength(1);
+});
+
 test("native success does not call any configured text fallback model", async () => {
 	const user = createUserEntry("native-first-user", "Keep the native checkpoint.");
 	const { sessionBeforeCompact, fallbackCalls } = await loadHookHarness({
@@ -1426,8 +1450,9 @@ test("Copilot persists resolved OAuth identity and replays compatible signed his
 	expect(JSON.stringify(rewritten.input.slice(blobIndex + 1))).toContain("Also retain this new tail");
 	const staleContext = createContext({ branchEntries, model, authBaseUrl: "https://api.business.githubcopilot.com" });
 	const originalPayload = JSON.stringify(payload);
-	// Preserve upstream fail-open behavior without replaying a blob at the wrong endpoint.
+	// A changed endpoint cannot replay this blob or safely use the placeholder.
 	expect(await reloaded.beforeProviderRequest({ payload }, staleContext)).toBeUndefined();
+	expect(staleContext.abortCount).toBe(1);
 	expect(JSON.stringify(payload)).toBe(originalPayload);
 	// A subsequent compaction uses the stored blob and only the post-checkpoint tail.
 	await reloaded.sessionBeforeCompact({
