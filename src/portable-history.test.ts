@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { reconstructPortableHistory } from "./portable-history";
+import { reconstructPendingPortableHistory, reconstructPortableHistory } from "./portable-history";
 import { createNativeCompactionDetails, NATIVE_COMPACTION_FALLBACK_SUMMARY } from "./types";
 
 const stamp = "2026-09-25T12:00:00.000Z";
@@ -91,6 +91,28 @@ test("a prior text summary stays portable even when the native kept boundary pre
 	const result = reconstructPortableHistory([ancient, kept, textCompaction, later, checkpoint] as never, checkpoint as never);
 	expect(texts(result)).toEqual(["Essential earlier textual context"]);
 	expect(JSON.stringify(result)).not.toContain("already summarized raw fact");
+});
+
+test("a failed second native compaction can rebuild the pending text boundary without a marker", () => {
+	const old = user("old", null, "earlier hidden fact");
+	const kept = user("kept", "old", "still needed fact");
+	const first = native("native1", "kept", "kept");
+	const newer = user("newer", "native1", "new fact to summarize");
+	const nextKept = user("next-kept", "newer", "request kept verbatim");
+	const result = reconstructPendingPortableHistory([old, kept, first, newer, nextKept] as never, nextKept.id, first as never);
+	expect(texts(result)).toEqual(["earlier hidden fact", "still needed fact", "new fact to summarize"]);
+	expect(JSON.stringify(result)).not.toContain(NATIVE_COMPACTION_FALLBACK_SUMMARY);
+});
+
+test("pending fallback projection honors a post-checkpoint edit to the hidden prefix", () => {
+	const old = user("old", null, "stale hidden fact");
+	const kept = user("kept", "old", "kept fact");
+	const checkpoint = native("native1", "kept", "kept");
+	const current = user("current", "native1", "new request kept verbatim");
+	const change = edit("change", "current", "old", [{ type: "text", text: "corrected hidden fact" }]);
+	const result = reconstructPendingPortableHistory([old, kept, checkpoint, current, change] as never, current.id, checkpoint as never);
+	expect(texts(result)).toEqual(["corrected hidden fact", "kept fact"]);
+	expect(JSON.stringify(result)).not.toContain("stale hidden fact");
 });
 
 test("retain-none checkpoint summarizes everything before its own entry", () => {

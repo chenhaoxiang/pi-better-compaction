@@ -55,6 +55,22 @@ test("model registry lookup failure skips to the next configured candidate", asy
 	expect(result).toMatchObject({ ok: true, model: { id: "gpt-backup" } });
 });
 
+test("manual compaction guidance reaches the portable summarizer", async () => {
+	let received: string | undefined;
+	const result = await summarizePortableHistory({
+		messages: [user("an exact decision")] as never,
+		ctx: context() as never,
+		config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" },
+		customInstructions: "Keep the exact decision.",
+		generate: async ({ customInstructions }) => {
+			received = customInstructions;
+			return { text: "## Goal\nKeep the exact decision.", usage: undefined };
+		},
+	});
+	expect(result.ok).toBe(true);
+	expect(received).toBe("Keep the exact decision.");
+});
+
 test("long source is summarized in ordered chunks with the preceding summary, not silently truncated", async () => {
 	const seen: Array<{ text: string; prior?: string }> = [];
 	const source = [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb"), user("fact-C-cccccccccc")];

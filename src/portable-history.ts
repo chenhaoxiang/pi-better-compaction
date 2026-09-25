@@ -46,3 +46,25 @@ export function reconstructPortableHistory(
 	for (const message of messages) hash.update("\n").update(JSON.stringify(message));
 	return { ok: true, messages, sourceDigest: hash.digest("hex") };
 }
+
+/** Preview the next text-compaction boundary without persisting a new checkpoint. */
+export function reconstructPendingPortableHistory(
+	branch: readonly SessionEntry[],
+	firstKeptEntryId: string,
+	priorCheckpoint: NativeCompactionEntry,
+): PortableHistoryResult {
+	if (!branch.some((entry) => entry.id === priorCheckpoint.id)) {
+		return { ok: false, reason: "checkpoint-not-on-branch" };
+	}
+	if (!priorCheckpoint.details) return { ok: false, reason: "invalid-native-checkpoint" };
+	let id = `pending-portable-${priorCheckpoint.id}`;
+	while (branch.some((entry) => entry.id === id)) id += "-next";
+	const pending = {
+		...priorCheckpoint,
+		id,
+		parentId: branch.at(-1)?.id ?? null,
+		firstKeptEntryId,
+		timestamp: new Date().toISOString(),
+	};
+	return reconstructPortableHistory([...branch, pending], pending);
+}

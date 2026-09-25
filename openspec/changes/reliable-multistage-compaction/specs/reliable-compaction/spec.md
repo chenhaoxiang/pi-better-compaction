@@ -24,9 +24,13 @@ For a supported Responses API, the extension SHALL try the configured native pro
 - **WHEN** native compact and the first text model fail without aborting and a later configured model succeeds
 - **THEN** the later model's portable result is used, and no later model or Pi-default compaction is invoked.
 
-#### Scenario: All configured strategies fail
-- **WHEN** native and all configured text models fail without aborting
-- **THEN** Pi's built-in compaction is offered the current pre-compaction history; the extension SHALL NOT store a false-success checkpoint.
+#### Scenario: All configured strategies fail before a native checkpoint exists
+- **WHEN** native and all configured text models fail without aborting and the session has no prior opaque checkpoint
+- **THEN** Pi's built-in compaction is offered the still-complete pre-compaction history; the extension SHALL NOT store a false-success checkpoint.
+
+#### Scenario: Native failure after an opaque checkpoint
+- **WHEN** native compaction fails and the latest prior summary is only an opaque-checkpoint marker
+- **THEN** the extension rebuilds the entire pending hidden history from the raw active branch and tries the configured portable summarizers followed by the active model. If all fail it cancels compaction rather than asking Pi to summarize a marker.
 
 ### Requirement: Portable continuity on first incompatible request
 When the latest session checkpoint is native and the selected model cannot replay it, the extension SHALL generate a portable summary only when the new model is about to make its first actual request. It SHALL derive the summary from the active branch's projected pre-compaction history, including all native-compacted spans and context edits, and persist it without replacing the native checkpoint. It SHALL NOT send a placeholder as if it were the summarized history.

@@ -9,6 +9,7 @@ type GenerateInput = {
 	model: Model<Api>;
 	auth: Auth;
 	previousSummary?: string;
+	customInstructions?: string;
 	thinkingLevel: ThinkingLevel;
 	signal?: AbortSignal;
 	sessionId?: string;
@@ -61,7 +62,7 @@ function cleanHeaders(headers: Auth["headers"]): Record<string, string> | undefi
 
 const defaultGenerate: PortableSummaryGenerator = async (input) => generateSummaryWithUsage(
 	input.messages, input.model, input.reserveTokens, input.auth.apiKey,
-	cleanHeaders(input.auth.headers), input.signal, undefined, input.previousSummary,
+	cleanHeaders(input.auth.headers), input.signal, input.customInstructions, input.previousSummary,
 	input.thinkingLevel, undefined, input.auth.env, undefined, undefined, input.sessionId,
 );
 
@@ -73,6 +74,7 @@ export async function summarizePortableHistory(args: {
 	signal?: AbortSignal;
 	sessionId?: string;
 	maxChunkBytes?: number;
+	customInstructions?: string;
 	generate?: PortableSummaryGenerator;
 }): Promise<PortableSummaryResult> {
 	const { messages, ctx, config, signal } = args;
@@ -130,6 +132,7 @@ export async function summarizePortableHistory(args: {
 					model,
 					auth,
 					previousSummary: summary,
+					customInstructions: args.customInstructions,
 					thinkingLevel: spec === `${ctx.model?.provider}/${ctx.model?.id}`
 						? (ctx.thinkingLevel ?? config.compactionThinkingLevel)
 						: config.compactionThinkingLevel,
