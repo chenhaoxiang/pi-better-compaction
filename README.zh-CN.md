@@ -7,23 +7,16 @@
 1. **OpenAI Responses 系列 API** 使用提供商原生压缩端点，保留纯文本摘要无法留存的不透明上下文。
 2. **其他所有 API**（Anthropic、Gemini 等）可用一个**独立的低成本模型**执行 pi 内置压缩，避免在主模型上消耗额度。
 
-所有环节都安全降级——任何步骤无法执行时，pi 的默认压缩自动接管。
+写入原生 checkpoint **之前**，失败会按配置逐级降级，最后由 Pi 默认压缩接管。写入不透明 checkpoint **之后**，切模型或回放失败仍可能只留下占位摘要；跨模型连续性会在下一批高优先级改动中单独修复。
 
 ## 安装
 
 ```bash
-# 从 npm 安装（推荐）
-pi install npm:@lll9p/pi-better-compaction
-
-# 临时试用，不安装
-pi -e npm:@lll9p/pi-better-compaction
-
-# 从源码安装
-git clone https://github.com/lll9p/pi-better-compaction.git
-cd pi-better-compaction && pi install .
+# 安装本 fork；需要固定行为时把 main 换成审核过的提交 SHA。
+pi install git:github.com/chenhaoxiang/pi-better-compaction@main
 ```
 
-安装后执行 `/reload` 生效。
+上游 npm 包 `@lll9p/pi-better-compaction` 是独立发布版本，不一定包含本 fork 的修复。安装后执行 `/reload` 生效。
 
 ## 要求
 
@@ -46,6 +39,7 @@ cd pi-better-compaction && pi install .
   "enabled": true,
   "compactionVersion": "v2",
   "compactionModel": null,
+  "additionalCompactionModels": [],
   "compactionThinkingLevel": "off",
   "responsesCompactApis": ["openai-responses", "openai-codex-responses"],
   "allowCompactionContinuityBreak": false,
@@ -66,7 +60,8 @@ cd pi-better-compaction && pi install .
 |------|------|--------|------|
 | `enabled` | `boolean` | `true` | 总开关。设为 `false` 完全禁用扩展。 |
 | `compactionVersion` | `"v1" \| "v2"` | `"v2"` | Responses 系列 API 的压缩协议。**V2**（流式，加密 blob）是 OpenAI 当前默认协议；**V1** 使用旧版 `/responses/compact` 端点。 |
-| `compactionModel` | `string \| null` | `null` | 回退压缩使用的模型（用于非 Responses API，或原生压缩失败时）。格式：`"provider/model-id"`，如 `"openai/gpt-5.1-mini"`。`null` = 由 pi 使用当前对话模型。 |
+| `compactionModel` | `string \| null` | `null` | 原生失败后的第一文本回退模型，格式为 `"provider/model-id"`；`null` 表示跳过此候选。 |
+| `additionalCompactionModels` | `string[]` | `[]` | 在 `compactionModel` 之后按顺序尝试的其他文本模型，最后才由 Pi 默认压缩接管。无效项会告警跳过，重复项只试一次。 |
 | `compactionThinkingLevel` | `string` | `"off"` | 回退压缩模型的思考级别。可选：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。 |
 | `responsesCompactApis` | `string[]` | `["openai-responses", "openai-codex-responses"]` | 启用原生压缩的 Responses API 列表。只能缩小内置集合，不能添加新值。 |
 | `allowCompactionContinuityBreak` | `boolean` | `false` | 当会话最近一次压缩不是本扩展创建的时，是否允许重新开始原生压缩。会在该边界处牺牲不透明窗口的连续性。 |
@@ -77,14 +72,17 @@ cd pi-better-compaction && pi install .
 | `redactSensitiveData` | `boolean` | `true` | 在调试文件中脱敏。 |
 | `artifactRoot` | `string` | `"~/.pi/agent/artifacts/pi-better-compaction"` | 调试文件根目录。支持 `~/` 和相对路径（相对于配置文件目录解析）。 |
 
-### 示例：使用低成本模型做回退压缩
+### 示例：按顺序配置文本回退模型
 
 ```json
 {
-  "compactionModel": "openai/gpt-5.1-mini",
-  "compactionThinkingLevel": "off"
+  "compactionModel": "codex-local/kimi-k3",
+  "additionalCompactionModels": ["codex-local/gpt-5.6-sol"],
+  "compactionThinkingLevel": "high"
 }
 ```
+
+只填写当前会话和目录政策允许的提供商/模型；写进回退列表不等于获得不受信中转渠道使用许可。
 
 ### 示例：强制使用 V1 压缩协议
 
@@ -103,11 +101,11 @@ pi 触发压缩时（`session_before_compact`）：
    - **V1**：POST 到 `/responses/compact`，接收不透明的压缩窗口。
    - 成功后，压缩窗口被存储，后续请求通过 `before_provider_request` 钩子回放。
 
-2. **非 Responses API，或原生压缩失败** → 若配置了 `compactionModel` 且与当前模型不同，使用该模型执行 pi 内置的 `compact()` 方法。
+2. **非 Responses API，或原生压缩失败** → 依次尝试 `compactionModel` 和 `additionalCompactionModels`，使用 Pi 的文本 `compact()`；成功就停，用户中止就取消。
 
-3. **未配置回退模型** → pi 的默认压缩照常执行，如同扩展未安装。
+3. **所有配置模型都失败或没有配置** → Pi 默认压缩处理尚未写入 checkpoint 的完整上下文。
 
-判断依据是 API 类型而非提供商——任何使用 Responses API 协议的 OpenAI 兼容代理都会触发原生压缩尝试。如果端点不支持，请求失败后自动回退。
+原生压缩按 API 类型而非提供商判断。V1/V2 提供商确实返回用量时，会附在 Pi 的压缩条目上并进入会话统计。
 
 ## 调试
 
@@ -133,9 +131,12 @@ pi 触发压缩时（`session_before_compact`）：
 ## 测试
 
 ```bash
-bun test
-bun test --coverage --coverage-reporter=text --coverage-reporter=lcov
+npm install --ignore-scripts --package-lock=false
+# 不访问真实模型的单元与合同测试
+bun test ./src ./test/runtime.test.ts
 ```
+
+现有 `test/pi-smoke.test.ts` 会向模型发请求，不包含在这条离线命令中。全仓 100% 覆盖率检查在未改的 main 基线上就失败；测试设施独立改动完成前，不能称该门禁已通过。
 
 ## 许可证
 

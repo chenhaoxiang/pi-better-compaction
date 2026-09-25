@@ -23,6 +23,7 @@ import {
 	type NativeCompactionRuntime,
 } from "./runtime";
 import { serializeMessagesToCompactRequest, type NativeCompactionRequestBody, type ResponsesInputItem } from "./serializer";
+import { mapResponsesCompactionUsage } from "./usage";
 import {
 	createNativeCompactionDetails,
 	createNativeCompactionResult,
@@ -233,6 +234,7 @@ async function runResponsesV1Compact(
 		tokensBefore: event.preparation.tokensBefore,
 		details,
 		summary: compactResult.summaryText,
+		usage: mapResponsesCompactionUsage(compactResult.response.usage, runtime.currentModel),
 	});
 
 	writeDebugArtifact(
@@ -391,6 +393,7 @@ async function runResponsesV2Compact(
 		firstKeptEntryId: event.preparation.firstKeptEntryId,
 		tokensBefore: event.preparation.tokensBefore,
 		details,
+		usage: mapResponsesCompactionUsage(v2Result.usage, runtime.currentModel),
 	});
 
 	writeDebugArtifact(
@@ -484,58 +487,51 @@ async function handleSessionBeforeCompact(
 		);
 	}
 
-	// Branch 2: run pi's native compaction method with the configured model.
-	const fallback = await dependencies.runNativeFallbackCompaction({
-		ctx,
-		event,
-		config,
-		sessionId: getSessionId(ctx),
-	});
-	if (fallback.ok) {
-		if (ctx.hasUI) {
-			ctx.ui.notify(
-				`${EXTENSION_ID}: compacted with ${fallback.model.provider}/${fallback.model.id} (native method)`,
-				"info",
-			);
-		}
-		writeDebugArtifact(
-			"compaction-event",
-			{
+	// Branch 2: try configured text models in order, without silently switching
+	// channels beyond the explicit list. A repeated spec is attempted only once.
+	const seenModels = new Set<string>();
+	const failures: string[] = [];
+	for (const modelSpec of [config.compactionModel, ...config.additionalCompactionModels]) {
+		// Preserve the legacy no-model probe when no alternate was configured.
+		if (!modelSpec && config.additionalCompactionModels.length > 0) continue;
+		if (modelSpec && seenModels.has(modelSpec)) continue;
+		if (modelSpec) seenModels.add(modelSpec);
+		const fallback = await dependencies.runNativeFallbackCompaction({
+			ctx,
+			event,
+			config: modelSpec ? { ...config, compactionModel: modelSpec } : config,
+			sessionId: getSessionId(ctx),
+		});
+		if (fallback.ok) {
+			if (ctx.hasUI) {
+				ctx.ui.notify(
+					`${EXTENSION_ID}: compacted with ${fallback.model.provider}/${fallback.model.id} (native method)`,
+					"info",
+				);
+			}
+			writeDebugArtifact("compaction-event", {
 				event: "session_before_compact.fallback-success",
 				model: fallback.model,
 				usage: fallback.usage,
-			},
-			config,
-			ctx,
-		);
-		return { compaction: fallback.result };
-	}
-
-	if (fallback.reason === "aborted") {
-		return { cancel: true };
-	}
-
-	writeDebugArtifact(
-		"compaction-event",
-		{
+			}, config, ctx);
+			return { compaction: fallback.result };
+		}
+		if (fallback.reason === "aborted") return { cancel: true };
+		writeDebugArtifact("compaction-event", {
 			event: "session_before_compact.fallback-skip",
 			reason: fallback.reason,
-			modelSpec: fallback.modelSpec,
+			modelSpec,
 			errorMessage: fallback.errorMessage,
-		},
-		config,
-		ctx,
-	);
-
-	// Intentional pi-default paths: no configured model, or it matches the current one.
-	if (fallback.reason !== "no-model-configured" && fallback.reason !== "same-as-current-model") {
-		notifyWarning(
-			ctx,
-			`compaction model "${fallback.modelSpec}" unusable (${fallback.reason}${fallback.errorMessage ? `: ${fallback.errorMessage}` : ""}); using pi's default compaction`,
-		);
+		}, config, ctx);
+		if (fallback.reason !== "same-as-current-model" && fallback.reason !== "no-model-configured") {
+			failures.push(`${modelSpec} (${fallback.reason})`);
+		}
 	}
 
-	// Branch 3: pi's default native compaction with the current model.
+	if (failures.length > 0) {
+		notifyWarning(ctx, `compaction models unavailable: ${failures.join(", ")}; using Pi's default compaction`);
+	}
+	// Branch 3: Pi's default compaction still has the full pre-compaction context.
 	return undefined;
 }
 

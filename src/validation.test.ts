@@ -34,6 +34,7 @@ type TestModel = {
 	baseUrl: string;
 	input: string[];
 	reasoning: boolean;
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 };
 
 type TestSessionEntry = {
@@ -54,6 +55,7 @@ type HookHarnessOptions = {
 	v2CompactResult?: Record<string, unknown>;
 	config?: Partial<ExtensionConfig>;
 	nativeFallbackResult?: Record<string, unknown>;
+	nativeFallbackResultsByModel?: Record<string, Record<string, unknown>>;
 };
 
 const defaultModel: TestModel = {
@@ -63,6 +65,7 @@ const defaultModel: TestModel = {
 	baseUrl: "https://api.openai.com/v1",
 	input: ["text"],
 	reasoning: true,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
 let timestampCounter = 0;
@@ -322,7 +325,11 @@ async function loadHookHarness(options: HookHarnessOptions = {}): Promise<{
 			}),
 			runNativeFallbackCompaction: async (args: Record<string, unknown>) => {
 				fallbackCalls.push(args);
-				return (options.nativeFallbackResult ?? { ok: false, reason: "no-model-configured" }) as never;
+				const model = (args.config as ExtensionConfig).compactionModel;
+				return (
+					(model && options.nativeFallbackResultsByModel?.[model]) ??
+					options.nativeFallbackResult ?? { ok: false, reason: "no-model-configured" }
+				) as never;
 			},
 			executeNativeCompaction: async (args: Record<string, unknown>) => {
 				compactCalls.push(args);
@@ -1257,6 +1264,94 @@ test("V2 abort cancels without fallback", async () => {
 	expect(compactCalls).toHaveLength(0);
 	expect(fallbackCalls).toHaveLength(0);
 	expect(result.cancel).toBe(true);
+});
+
+test("native success does not call any configured text fallback model", async () => {
+	const user = createUserEntry("native-first-user", "Keep the native checkpoint.");
+	const { sessionBeforeCompact, fallbackCalls } = await loadHookHarness({
+		config: { compactionModel: "codex-local/kimi-k3", additionalCompactionModels: ["codex-local/gpt-5.6-sol"] },
+		v2CompactResult: { ok: true, compactionItem: { type: "compaction", encrypted_content: "opaque" } },
+	});
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	const result = await sessionBeforeCompact(event, createContext({ sessionContextMessages: [toReplayMessage(user)] })) as { compaction: { details: { strategy: string } } };
+	expect(result.compaction.details.strategy).toBe("openai-native-compact-v2");
+	expect(fallbackCalls).toHaveLength(0);
+});
+
+test("native failure tries configured text models in order and stops at the first success", async () => {
+	const user = createUserEntry("ordered-user", "Summarize this history.");
+	const portable = { summary: "## Goal\nContinue this task.", firstKeptEntryId: user.id, tokensBefore: 512 };
+	const { sessionBeforeCompact, fallbackCalls } = await loadHookHarness({
+		config: {
+			compactionModel: "codex-local/kimi-k3",
+			additionalCompactionModels: ["codex-local/gpt-5.6-sol", "codex-local/kimi-k3"],
+		},
+		v2CompactResult: { ok: false, reason: "non-2xx" },
+		nativeFallbackResultsByModel: {
+			"codex-local/kimi-k3": { ok: false, reason: "auth-failed" },
+			"codex-local/gpt-5.6-sol": { ok: true, result: portable, model: { provider: "codex-local", id: "gpt-5.6-sol" } },
+		},
+	});
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	const result = await sessionBeforeCompact(event, createContext({ sessionContextMessages: [toReplayMessage(user)] })) as { compaction: unknown };
+	expect(result.compaction).toEqual(portable);
+	expect(fallbackCalls.map((call) => (call.config as ExtensionConfig).compactionModel)).toEqual([
+		"codex-local/kimi-k3",
+		"codex-local/gpt-5.6-sol",
+	]);
+});
+
+test("all configured text models failing returns control to Pi default, but abort stops the chain", async () => {
+	const user = createUserEntry("chain-user", "Preserve this history.");
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	const base = { compactionModel: "codex-local/kimi-k3", additionalCompactionModels: ["codex-local/gpt-5.6-sol"] };
+	const failing = await loadHookHarness({
+		config: base,
+		v2CompactResult: { ok: false, reason: "non-2xx" },
+		nativeFallbackResult: { ok: false, reason: "compact-failed" },
+	});
+	expect(await failing.sessionBeforeCompact(event, createContext({ sessionContextMessages: [toReplayMessage(user)] }))).toBeUndefined();
+	expect(failing.fallbackCalls).toHaveLength(2);
+
+	const aborted = await loadHookHarness({
+		config: base,
+		v2CompactResult: { ok: false, reason: "non-2xx" },
+		nativeFallbackResultsByModel: { "codex-local/kimi-k3": { ok: false, reason: "aborted" } },
+	});
+	expect(await aborted.sessionBeforeCompact(event, createContext({ sessionContextMessages: [toReplayMessage(user)] }))).toEqual({ cancel: true });
+	expect(aborted.fallbackCalls).toHaveLength(1);
+});
+
+test("V1 and V2 provider usage flows into Pi compaction results", async () => {
+	const user = createUserEntry("usage-user", "Track native compaction usage.");
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	const ctx = createContext({ sessionContextMessages: [toReplayMessage(user)] });
+	const rawUsage = { input_tokens: 900, output_tokens: 100, total_tokens: 1000 };
+	const v2 = await loadHookHarness({
+		v2CompactResult: { ok: true, compactionItem: { type: "compaction", encrypted_content: "opaque" }, usage: rawUsage },
+	});
+	const v2Result = await v2.sessionBeforeCompact(event, ctx) as { compaction: { usage?: { input: number; output: number; totalTokens: number } } };
+	expect(v2Result.compaction.usage).toMatchObject({ input: 900, output: 100, totalTokens: 1000 });
+
+	const window = [{ type: "compaction", encrypted_content: "opaque" }];
+	const v1 = await loadHookHarness({
+		config: { compactionVersion: "v1" },
+		compactResult: { ok: true, status: 200, compactedWindow: window, response: { output: window, usage: rawUsage } },
+	});
+	const v1Result = await v1.sessionBeforeCompact(event, ctx) as { compaction: { usage?: { input: number; output: number; totalTokens: number } } };
+	expect(v1Result.compaction.usage).toMatchObject({ input: 900, output: 100, totalTokens: 1000 });
 });
 
 test("Copilot persists resolved OAuth identity and replays compatible signed history after reload", async () => {

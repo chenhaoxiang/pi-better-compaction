@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Usage } from "@earendil-works/pi-ai";
 import type { CompactionEntry, CompactionResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export const EXTENSION_ID = "pi-better-compaction";
@@ -45,6 +46,8 @@ export type ExtensionConfig = {
 	 * or when the compact endpoint fails). Unset = current model via pi's default path.
 	 */
 	compactionModel?: string;
+	/** Ordered text-compaction candidates after compactionModel and before Pi's default. */
+	additionalCompactionModels: string[];
 	/** Thinking level passed to pi's native compact() when the fallback model runs. */
 	compactionThinkingLevel: ThinkingLevel;
 	/** Subset of RESPONSES_COMPACT_CAPABLE_APIS that should use the compact endpoint. */
@@ -53,7 +56,7 @@ export type ExtensionConfig = {
 	 * Which compaction protocol to use for Responses-family APIs.
 	 * - "v2" (default): streaming CompactionTrigger via /responses endpoint.
 	 * - "v1": POST /responses/compact endpoint.
-	 * V2 failures automatically fall back to V1.
+	 * V2 failures enter the configured text-model fallback chain, then Pi's default.
 	 */
 	compactionVersion: CompactionVersion;
 	notifyOnLoad: boolean;
@@ -148,6 +151,8 @@ export type CreateNativeCompactionResultInput = {
 	 * pi's default replay still has real context after switching to an unsupported model.
 	 */
 	summary?: string;
+	/** Provider-reported native compaction usage, recorded by Pi with the entry. */
+	usage?: Usage;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -299,6 +304,7 @@ export function createNativeCompactionResult(
 		firstKeptEntryId: input.firstKeptEntryId,
 		tokensBefore: input.tokensBefore,
 		details: input.details,
+		...(input.usage ? { usage: input.usage } : {}),
 	};
 }
 
@@ -306,6 +312,7 @@ export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
 	enabled: true,
 	allowCompactionContinuityBreak: false,
 	compactionModel: undefined,
+	additionalCompactionModels: [],
 	compactionThinkingLevel: "off",
 	responsesCompactApis: [...RESPONSES_COMPACT_CAPABLE_APIS],
 	compactionVersion: "v2",

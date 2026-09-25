@@ -47,6 +47,7 @@
     "src/shared-headers.ts",
     "src/supported-environment.ts",
     "src/types.ts",
+    "src/usage.ts",
     "README.md",
     "README.zh-CN.md",
     "LICENSE"
@@ -60,5 +61,10 @@
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": ">=0.84.3"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.87.1",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "0.87.1"
   }
 }

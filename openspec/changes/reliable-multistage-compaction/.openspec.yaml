@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-26
+goal: Preserve context continuity across model changes without calling a
+  portable summarizer when native-only sessions never switch models.
