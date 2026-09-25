@@ -80,6 +80,32 @@ function toModelSpec(value: unknown, fieldPath: string, warnings: string[]): str
 	return undefined;
 }
 
+function toAdditionalCompactionModels(value: unknown, warnings: string[]): string[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) {
+		warnings.push("Ignoring additionalCompactionModels: expected an array of provider/model-id strings.");
+		return undefined;
+	}
+
+	const accepted: string[] = [];
+	const seen = new Set<string>();
+	for (const [index, item] of value.entries()) {
+		const spec = typeof item === "string" ? item.trim() : "";
+		const separator = spec.indexOf("/");
+		const provider = spec.slice(0, separator);
+		const modelId = spec.slice(separator + 1);
+		if (separator <= 0 || !modelId || /\s/.test(provider) || /\s/.test(modelId)) {
+			warnings.push(`Ignoring additionalCompactionModels[${index}]: expected provider/model-id.`);
+			continue;
+		}
+		if (!seen.has(spec)) {
+			seen.add(spec);
+			accepted.push(spec);
+		}
+	}
+	return accepted;
+}
+
 function toThinkingLevel(value: unknown, fieldPath: string, warnings: string[]): ThinkingLevel | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value)) {
@@ -129,6 +155,7 @@ export function loadExtensionConfig(configPath: string = CONFIG_PATH): LoadedExt
 	const resolved: ExtensionConfig = {
 		...DEFAULT_EXTENSION_CONFIG,
 		responsesCompactApis: [...DEFAULT_EXTENSION_CONFIG.responsesCompactApis],
+		additionalCompactionModels: [...DEFAULT_EXTENSION_CONFIG.additionalCompactionModels],
 	};
 	let source: string | undefined;
 
@@ -154,6 +181,9 @@ export function loadExtensionConfig(configPath: string = CONFIG_PATH): LoadedExt
 		if (modelSpec !== undefined) {
 			resolved.compactionModel = modelSpec === null ? undefined : modelSpec;
 		}
+
+		resolved.additionalCompactionModels =
+			toAdditionalCompactionModels(raw.additionalCompactionModels, warnings) ?? resolved.additionalCompactionModels;
 
 		resolved.compactionThinkingLevel =
 			toThinkingLevel(raw.compactionThinkingLevel, "compactionThinkingLevel", warnings) ??
