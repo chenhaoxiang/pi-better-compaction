@@ -106,7 +106,7 @@ When pi triggers compaction (`session_before_compact`):
 
 3. **After a native checkpoint, on the first actual incompatible-model request** → rebuild the branch's hidden history with Pi context edits, produce a bounded portable text summary with the same configured model order (then the selected model), and persist it as branch-sensitive non-context state. On subsequent requests reuse it; on the original model keep native replay. If summarization or replay cannot proceed safely, abort the request and keep the session intact.
 
-Selection is by API type, not provider — any compatible Responses API gets a native attempt. Native V1/V2 usage enters Pi's compaction totals when the provider reports it. On-demand portable-summary usage is stored with its custom session entry for audit but cannot currently enter Pi `/session` totals through the read-only extension session API.
+Selection is by API type, not provider — any compatible Responses API gets a native attempt. A terminal V2 SSE `response.failed`/`error` is not retried. An incomplete stream after a compaction item is never persisted or automatically retried; a pre-output transport interruption may use the bounded retry policy before falling through to text compaction. Native V1/V2 usage enters Pi's compaction totals when the provider reports it. On-demand portable-summary usage is stored with its custom session entry for audit but cannot currently enter Pi `/session` totals through the read-only extension session API.
 
 **Do not uninstall or downgrade this fork while an active session depends on an opaque checkpoint.** Removing the extension also removes its request guard; an older version can send the placeholder without the hidden context. Finish or verify a portable continuation first, or keep the pinned version for that session.
 
@@ -135,11 +135,11 @@ Then `/reload`, run `/compact`, send a follow-up message, and inspect. Debug art
 
 ```bash
 npm install --ignore-scripts --package-lock=false
-# Provider-free unit/contract and loopback-abort checks
-bun test ./src ./test/runtime.test.ts ./test/provider-abort.test.ts
+npm test               # All tests are provider-free; RPC load and abort use synthetic local models
+npm run test:coverage  # Baseline-pinned non-regression, not a 100% coverage claim
 ```
 
-The older `test/pi-smoke.test.ts` still sends a model prompt and is not part of this offline command; the medium-priority test-infrastructure PR will replace it. The existing 100%-coverage checker also fails on the untouched baseline and is not a passing gate.
+CI also checks every instrumented changed runtime source line against its PR patch. The [coverage baseline](test/coverage-baseline.json) was measured on fork main `481b30e` (2612/3306 lines, 224/250 functions); Bun reported no branch coverage, so branch coverage is explicitly **not** a passing gate. Strict TypeScript checking still has 21 pre-existing errors on that baseline and is not claimed green by this CI. No test sends a prompt to a real provider.
 
 ## License
 

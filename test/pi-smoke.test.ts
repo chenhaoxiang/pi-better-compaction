@@ -3,29 +3,13 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 describe("pi smoke", () => {
-	test(
-		"loads from the local package path",
-		() => {
-			const packageDir = path.resolve(import.meta.dir, "..");
-			const result = spawnSync(
-				"pi",
-				[
-					"--no-session",
-					"--offline",
-					"--no-extensions",
-					"--no-skills",
-					"--no-prompt-templates",
-					"-e",
-					packageDir,
-					"-p",
-					"Reply with the single word OK.",
-				],
-				{ encoding: "utf8" },
-			);
-
-			expect(result.status).toBe(0);
-			expect(result.stdout.trim()).toBe("OK");
-		},
-		30000,
-	);
+	test("loads the local extension via isolated RPC without sending a model prompt", () => {
+		const packageDir = path.resolve(import.meta.dir, "..");
+		const fixture = path.resolve(import.meta.dir, "fixtures/extension-load-rpc.mjs");
+		const result = spawnSync("node", [fixture, packageDir], { encoding: "utf8", timeout: 30_000 });
+		if (result.status !== 0) console.error(result.stderr || result.stdout || result.error);
+		expect(result.status).toBe(0);
+		const state = JSON.parse(result.stdout.trim());
+		expect(state).toMatchObject({ loaded: true, modelId: "gpt-synthetic", code: 0 });
+	}, 35_000);
 });

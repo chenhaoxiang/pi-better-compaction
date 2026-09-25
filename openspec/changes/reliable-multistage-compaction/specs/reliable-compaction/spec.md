@@ -84,6 +84,10 @@ Native compact retries SHALL be limited to failures for which replaying the requ
 - **WHEN** the stream reports a terminal provider failure
 - **THEN** the extension does not issue another identical compact request solely because the response was received as SSE.
 
-#### Scenario: Recoverable transport interruption
-- **WHEN** a transient transport interruption occurs before successful completion
+#### Scenario: Recoverable pre-output transport interruption
+- **WHEN** a transient transport interruption occurs before any compaction output and before successful completion
 - **THEN** bounded retry may occur with abort respected; exhaustion proceeds through the configured fallback chain.
+
+#### Scenario: Ambiguous interruption after compaction output
+- **WHEN** an output item has already arrived but the stream ends or throws before `response.completed`
+- **THEN** the extension neither persists the partial blob nor issues an automatic second native request; it proceeds through the configured fallback chain.

@@ -383,9 +383,63 @@ describe("executeV2Compaction", () => {
 
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.reason).toBe("stream-parse-error");
+			expect(result.reason).toBe("provider-failed");
 			expect(result.errorMessage).toBe("Server overloaded");
 		}
+	});
+
+	test.each(["response.failed", "error"])("terminal SSE %s is not retried", async (eventType) => {
+		let fetchCount = 0;
+		globalThis.fetch = mock(async () => {
+			fetchCount++;
+			return sseResponse([{ type: eventType, error: { message: "provider rejected compaction" } }]);
+		}) as typeof fetch;
+		const result = await executeV2Compaction({ runtime: createRuntime(), request: createRequest(), maxRetries: 2 });
+		expect(result).toMatchObject({ ok: false, reason: "provider-failed" });
+		expect(fetchCount).toBe(1);
+	});
+
+	test("truncated SSE after a compaction item cannot persist or automatically retry ambiguous billed work", async () => {
+		let fetchCount = 0;
+		globalThis.fetch = mock(async () => { fetchCount++; return sseResponse([compactionOutputItemDone("incomplete")]); }) as typeof fetch;
+		const result = await executeV2Compaction({ runtime: createRuntime(), request: createRequest(), maxRetries: 2 });
+		expect(result).toMatchObject({ ok: false, reason: "incomplete-response" });
+		expect(fetchCount).toBe(1);
+	});
+
+	test("truncated SSE before any compaction output may retry and use a later complete response", async () => {
+		let fetchCount = 0;
+		globalThis.fetch = mock(async () => {
+			fetchCount++;
+			return fetchCount === 1
+				? sseResponse([{ type: "response.created", response: { id: "not-complete" } }])
+				: sseResponse([compactionOutputItemDone("complete"), responseCompleted("resp_complete")]);
+		}) as typeof fetch;
+		const result = await executeV2Compaction({ runtime: createRuntime(), request: createRequest(), maxRetries: 1 });
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.compactionItem.encrypted_content).toBe("complete");
+		expect(fetchCount).toBe(2);
+	});
+
+	test("reader failure after an emitted blob is ambiguous and is not retried", async () => {
+		let fetchCount = 0;
+		globalThis.fetch = mock(async () => {
+			fetchCount++;
+			let emitted = false;
+			return new Response(new ReadableStream({
+				pull(controller) {
+					if (!emitted) {
+						emitted = true;
+						controller.enqueue(new TextEncoder().encode(sseBody([compactionOutputItemDone("partial")])));
+					} else {
+						controller.error(new Error("synthetic stream drop"));
+					}
+				},
+			}), { status: 200, headers: { "content-type": "text/event-stream" } });
+		}) as typeof fetch;
+		const result = await executeV2Compaction({ runtime: createRuntime(), request: createRequest(), maxRetries: 2 });
+		expect(result).toMatchObject({ ok: false, reason: "incomplete-response" });
+		expect(fetchCount).toBe(1);
 	});
 
 	test("handles compaction_summary alias for type", async () => {

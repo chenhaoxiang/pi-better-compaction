@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  provider-free-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Install test dependencies without lifecycle scripts
+        run: npm install --ignore-scripts --package-lock=false --no-audit --no-fund
+      - name: Provider-free test suite
+        run: npm test
+      - name: Coverage against pinned baseline
+        run: npm run test:coverage
+      - name: Require coverage of changed source lines
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            cd "$GITHUB_WORKSPACE" && git fetch origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF" --no-tags
+            cd "$GITHUB_WORKSPACE" && git diff -U0 "origin/$BASE_REF"...HEAD -- src/ > tmp/coverage/changed.patch
+          else
+            cd "$GITHUB_WORKSPACE" && git diff -U0 HEAD^ HEAD -- src/ > tmp/coverage/changed.patch
+          fi
+          node scripts/check-lcov.mjs tmp/coverage/lcov.info --baseline test/coverage-baseline.json --patch tmp/coverage/changed.patch

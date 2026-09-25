@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "481b30ed78b0a44454faafcd3db5e40b558f3424",
+  "recordedAt": "2026-09-26",
+  "suite": "bun test ./src ./test/runtime.test.ts ./test/provider-abort.test.ts --coverage --coverage-reporter=lcov",
+  "note": "Provider-free fork main before the retry/CI change. Bun 1.4.2 reports no branch coverage (BRF=0); branch coverage is not a passing gate.",
+  "totals": { "LF": 3306, "LH": 2612, "FNF": 250, "FNH": 224, "BRF": 0, "BRH": 0 },
+  "files": {
+    "src/compact-client-v2.ts": { "LF": 284, "LH": 254, "FNF": 11, "FNH": 11 }
+  }
+}

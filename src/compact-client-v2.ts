@@ -40,6 +40,8 @@ export type V2CompactionFailureReason =
 	| "aborted"
 	| "network-error"
 	| "non-2xx"
+	| "provider-failed"
+	| "incomplete-response"
 	| "no-compaction-output"
 	| "multiple-compaction-outputs"
 	| "stream-parse-error"
@@ -119,6 +121,7 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 	let createdAt: string | undefined;
 	let usage: V2CompactionUsage | undefined;
 	let serverError: string | undefined;
+	let completed = false;
 
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
@@ -170,6 +173,7 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 				}
 
 				if (eventType === "response.completed") {
+					completed = true;
 					const resp = event.response;
 					if (isRecord(resp)) {
 						responseId = typeof resp.id === "string" ? resp.id : undefined;
@@ -194,7 +198,11 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 		if (signal?.aborted || isAbortError(error)) {
 			return { ok: false, reason: "aborted" as const };
 		}
-		return { ok: false, reason: "stream-parse-error", errorMessage: error instanceof Error ? error.message : String(error) };
+		return {
+			ok: false,
+			reason: compactionItems.length > 0 ? "incomplete-response" : "stream-parse-error",
+			errorMessage: error instanceof Error ? error.message : String(error),
+		};
 	} finally {
 		// Completion is terminal even when a gateway keeps the HTTP body open.
 		try { await reader.cancel(); } catch { /* noop */ }
@@ -202,7 +210,14 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 	}
 
 	if (serverError) {
-		return { ok: false, reason: "stream-parse-error", errorMessage: serverError };
+		return { ok: false, reason: "provider-failed", errorMessage: serverError };
+	}
+	if (!completed) {
+		return {
+			ok: false,
+			reason: compactionItems.length > 0 ? "incomplete-response" : "stream-parse-error",
+			errorMessage: "Responses stream ended before response.completed",
+		};
 	}
 
 	return { ok: true, compactionItems, responseId, createdAt, usage };
