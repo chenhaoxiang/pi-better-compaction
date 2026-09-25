@@ -104,7 +104,7 @@ When pi triggers compaction (`session_before_compact`):
 
 2. **Not a Responses API, or native compact failed** → try `compactionModel`, then `additionalCompactionModels` in order using Pi's text `compact()`. On success stop; on abort cancel; if all configured models fail, Pi's default compaction receives the original pre-checkpoint context.
 
-3. **After a native checkpoint, on the first actual incompatible-model request** → rebuild the branch's hidden history with Pi context edits, produce a bounded portable text summary with the same configured model order (then the selected model), and persist it as branch-sensitive non-context state. On subsequent requests reuse it; on the original model keep native replay. If summarization or replay cannot proceed safely, abort the request and keep the session intact.
+3. **After a native checkpoint, on the first actual request that cannot replay its identity (including an OAuth-rerouted endpoint)** → rebuild the branch's hidden history with Pi context edits, produce a bounded portable text summary with the same configured model order (then the selected model), and persist it as branch-sensitive non-context state. On subsequent requests reuse it; on the original model keep native replay. If summarization or replay cannot proceed safely, abort the request and keep the session intact.
 
 Selection is by API type, not provider — any compatible Responses API gets a native attempt. Native V1/V2 usage enters Pi's compaction totals when the provider reports it. On-demand portable-summary usage is stored with its custom session entry for audit but cannot currently enter Pi `/session` totals through the read-only extension session API.
 

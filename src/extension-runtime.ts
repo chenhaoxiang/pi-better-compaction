@@ -581,6 +581,18 @@ function matchesCheckpointModel(ctx: ExtensionContext, checkpoint: ReturnType<ty
 	return model.provider === details.provider && model.api === details.api && model.id === details.model;
 }
 
+async function canReplayCheckpoint(ctx: ExtensionContext, checkpoint: NonNullable<ReturnType<typeof latestOpaqueCheckpoint>>, config: ExtensionConfig): Promise<boolean> {
+	if (!matchesCheckpointModel(ctx, checkpoint)) return false;
+	const resolved = await resolveNativeCompactionEnvironment(ctx, {
+		enabled: config.enabled,
+		responsesCompactApis: config.responsesCompactApis,
+	});
+	// Auth failure cannot be repaired by porting text to the same unavailable model.
+	// The provider-request hook will abort the still-opaque attempt explicitly.
+	if (!resolved.ok) return true;
+	return resolved.runtime.baseUrl === checkpoint.details?.baseUrl;
+}
+
 function abortOpaqueRequest(ctx: ExtensionContext, config: ExtensionConfig, reason: string): void {
 	// Abort first: Pi reports and ignores hook errors, so a broken UI or debug
 	// filesystem must never turn this safety gate into a normal provider request.
@@ -610,7 +622,7 @@ async function handlePortableContext(
 		abortOpaqueRequest(ctx, config, "invalid-native-details");
 		return undefined;
 	}
-	if (!checkpoint || matchesCheckpointModel(ctx, checkpoint)) return undefined;
+	if (!checkpoint || await canReplayCheckpoint(ctx, checkpoint, config)) return undefined;
 	if (!config.enabled || !event.messages.some((message) =>
 		message.role === "compactionSummary" && message.summary === NATIVE_COMPACTION_FALLBACK_SUMMARY,
 	)) {
@@ -864,13 +876,14 @@ export function registerExtensionRuntime(
 			return undefined;
 		}
 	});
-	pi.on("cache_warming_decision", (_event, ctx) => {
+	pi.on("cache_warming_decision", async (_event, ctx) => {
 		try {
+			const { config } = dependencies.loadExtensionConfig();
 			const branch = ctx.sessionManager.getBranch();
 			const opaqueMarker = latestOpaqueMarker(branch);
 			const checkpoint = latestOpaqueCheckpoint(branch);
 			if (opaqueMarker && !checkpoint) return { action: "stop" as const };
-			if (!checkpoint || matchesCheckpointModel(ctx, checkpoint)) return undefined;
+			if (!checkpoint || await canReplayCheckpoint(ctx, checkpoint, config)) return undefined;
 			const source = reconstructPortableHistory(branch, checkpoint);
 			return source.ok && cachedPortableSummary(branch, checkpoint.id, source.sourceDigest)
 				? undefined : { action: "stop" as const };

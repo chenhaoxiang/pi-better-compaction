@@ -116,6 +116,29 @@ test("an edit to hidden history invalidates a cached portable summary", async ()
 	expect(h.entries.filter((entry) => entry.type === "custom")).toHaveLength(2);
 });
 
+test("OAuth endpoint change triggers portable text even when provider and model id stay the same", async () => {
+	const h = harness();
+	h.entries[2] = { ...h.entries[2], details: { ...h.entries[2].details, baseUrl: "https://old-auth.example.invalid/v1" } };
+	const stable = h.makeCtx(nativeModel);
+	stable.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: true, apiKey: "synthetic", baseUrl: "https://old-auth.example.invalid/v1" });
+	expect(await h.handlers.get("context")!({ messages: originalMessages }, stable)).toBeUndefined();
+	expect(h.generated).toHaveLength(0);
+
+	const moved = h.makeCtx(nativeModel);
+	moved.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: true, apiKey: "synthetic", baseUrl: "https://new-auth.example.invalid/v1" });
+	expect(await h.handlers.get("cache_warming_decision")!({ action: "warm" }, moved)).toEqual({ action: "stop" });
+	const portable = await h.handlers.get("context")!({ messages: originalMessages }, moved);
+	expect(portable.messages[0].summary).toBe("## Goal\nPortable decision A");
+	expect(h.generated).toHaveLength(1);
+	const payload = { model: nativeModel.id, instructions: "Synthetic prompt", input: [
+		{ role: "system", content: "Synthetic prompt" },
+		...serializeMessagesToResponsesInput(nativeModel as never, [portable.messages[0], kept.message, tail.message] as never),
+	] };
+	expect(await h.handlers.get("before_provider_request")!({ payload }, moved)).toBeUndefined();
+	expect(h.aborted).toBe(0);
+	expect(await h.handlers.get("cache_warming_decision")!({ action: "warm" }, moved)).toBeUndefined();
+});
+
 test("portable summarization failure aborts before a placeholder can be sent", async () => {
 	const h = harness({ fail: true });
 	const result = await h.handlers.get("context")!({ messages: originalMessages }, h.makeCtx());
