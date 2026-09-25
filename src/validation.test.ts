@@ -56,6 +56,7 @@ type HookHarnessOptions = {
 	config?: Partial<ExtensionConfig>;
 	nativeFallbackResult?: Record<string, unknown>;
 	nativeFallbackResultsByModel?: Record<string, Record<string, unknown>>;
+	portableSummaryResult?: Record<string, unknown>;
 };
 
 const defaultModel: TestModel = {
@@ -308,10 +309,12 @@ async function loadHookHarness(options: HookHarnessOptions = {}): Promise<{
 	compactCalls: Array<Record<string, unknown>>;
 	v2CompactCalls: Array<Record<string, unknown>>;
 	fallbackCalls: Array<Record<string, unknown>>;
+	portableSummaryCalls: Array<Record<string, unknown>>;
 }> {
 	const compactCalls: Array<Record<string, unknown>> = [];
 	const v2CompactCalls: Array<Record<string, unknown>> = [];
 	const fallbackCalls: Array<Record<string, unknown>> = [];
+	const portableSummaryCalls: Array<Record<string, unknown>> = [];
 
 	const handlers = new Map<string, HookHandler>();
 	registerExtensionRuntime(
@@ -330,6 +333,10 @@ async function loadHookHarness(options: HookHarnessOptions = {}): Promise<{
 				source: undefined,
 				warnings: [],
 			}),
+			summarizePortableHistory: async (args: Record<string, unknown>) => {
+				portableSummaryCalls.push(args);
+				return (options.portableSummaryResult ?? { ok: false, reason: "all-models-failed", usageRecords: [] }) as never;
+			},
 			runNativeFallbackCompaction: async (args: Record<string, unknown>) => {
 				fallbackCalls.push(args);
 				const model = (args.config as ExtensionConfig).compactionModel;
@@ -379,6 +386,7 @@ async function loadHookHarness(options: HookHarnessOptions = {}): Promise<{
 		compactCalls,
 		v2CompactCalls,
 		fallbackCalls,
+		portableSummaryCalls,
 	};
 }
 
@@ -1151,6 +1159,71 @@ test("V2 compaction success returns compactedWindow with retained messages + blo
 	const lastItem = details.compactedWindow[details.compactedWindow.length - 1] as Record<string, unknown>;
 	expect(lastItem.type).toBe("compaction");
 	expect(lastItem.encrypted_content).toBe("encrypted-blob");
+});
+
+test("disabled extension or broken debug storage cannot let Pi compact an opaque-only marker", async () => {
+	const old = createUserEntry("guard-old", "Preserve this hidden fact.");
+	const checkpoint = createCompactionEntry({ id: "guard-native", firstKeptEntryId: old.id,
+		compactedWindow: [{ type: "compaction", encrypted_content: "opaque" }] });
+	const current = createUserEntry("guard-current", "Next request.");
+	const event = { signal: new AbortController().signal, preparation: {
+		tokensBefore: 4096, firstKeptEntryId: current.id, previousSummary: NATIVE_COMPACTION_FALLBACK_SUMMARY,
+		messagesToSummarize: [toReplayMessage(old)], turnPrefixMessages: [],
+	} };
+	const ctx = createContext({ branchEntries: [old, checkpoint, current] });
+	const disabled = await loadHookHarness({ config: { enabled: false } });
+	expect(await disabled.sessionBeforeCompact(event, ctx)).toEqual({ cancel: true });
+	const brokenDebug = await loadHookHarness({ config: { debug: true, artifactRoot: "/dev/null/pi-better-compaction" } });
+	expect(await brokenDebug.sessionBeforeCompact(event, ctx)).toEqual({ cancel: true });
+});
+
+test("native failure after an opaque checkpoint rebuilds full portable history instead of compacting a marker", async () => {
+	const old = createUserEntry("prior-old", "Historic decision A.");
+	const kept = createUserEntry("prior-kept", "Historic decision B.");
+	const checkpoint = createCompactionEntry({ id: "prior-native", firstKeptEntryId: kept.id,
+		compactedWindow: [{ type: "compaction", encrypted_content: "opaque-prior-history" }] });
+	const current = createUserEntry("prior-current", "Keep this latest request verbatim.");
+	const branchEntries = [old, kept, checkpoint, current];
+	const event = { signal: new AbortController().signal, preparation: {
+		tokensBefore: 4096, firstKeptEntryId: current.id,
+		previousSummary: NATIVE_COMPACTION_FALLBACK_SUMMARY,
+		messagesToSummarize: [toReplayMessage(kept)], turnPrefixMessages: [],
+	} };
+	const h = await loadHookHarness({
+		config: { compactionModel: "codex-local/kimi-k3" },
+		v2CompactResult: { ok: false, reason: "non-2xx" },
+		portableSummaryResult: { ok: true, summary: "## Goal\nA and B survived.", model: { provider: "codex-local", id: "kimi-k3" }, usageRecords: [{
+			provider: "codex-local", model: "kimi-k3",
+			usage: { input: 100, output: 20, cacheRead: 10, cacheWrite: 2, cacheWrite1h: 2, reasoning: 5,
+				totalTokens: 132, cost: { input: 0.1, output: 0.2, cacheRead: 0.01, cacheWrite: 0.02, total: 0.33 } },
+		}] },
+	});
+	const result = await h.sessionBeforeCompact(event, createContext({ branchEntries })) as { compaction: { summary: string; firstKeptEntryId: string } };
+	expect(result.compaction.summary).toBe("## Goal\nA and B survived.");
+	expect(result.compaction.firstKeptEntryId).toBe(current.id);
+	expect((result.compaction as any).usage).toMatchObject({ input: 100, output: 20, cacheRead: 10, cacheWrite1h: 2, reasoning: 5, totalTokens: 132, cost: { total: 0.33 } });
+	expect(h.portableSummaryCalls).toHaveLength(1);
+	const reconstructed = JSON.stringify(h.portableSummaryCalls[0].messages);
+	expect(reconstructed).toContain("Historic decision A");
+	expect(reconstructed).toContain("Historic decision B");
+	expect(reconstructed).not.toContain(NATIVE_COMPACTION_FALLBACK_SUMMARY);
+	expect(reconstructed).not.toContain("Keep this latest request verbatim");
+	expect(h.fallbackCalls).toHaveLength(0);
+});
+
+test("all portable candidates failing after native failure cancels rather than sending the marker to Pi default", async () => {
+	const old = createUserEntry("opaque-old", "Cannot drop this history.");
+	const checkpoint = createCompactionEntry({ id: "opaque-native", firstKeptEntryId: old.id,
+		compactedWindow: [{ type: "compaction", encrypted_content: "opaque" }] });
+	const current = createUserEntry("opaque-current", "Request after checkpoint.");
+	const event = { signal: new AbortController().signal, preparation: {
+		tokensBefore: 4096, firstKeptEntryId: current.id, previousSummary: NATIVE_COMPACTION_FALLBACK_SUMMARY,
+		messagesToSummarize: [toReplayMessage(old)], turnPrefixMessages: [],
+	} };
+	const h = await loadHookHarness({ v2CompactResult: { ok: false, reason: "non-2xx" },
+		portableSummaryResult: { ok: false, reason: "all-models-failed", usageRecords: [] } });
+	expect(await h.sessionBeforeCompact(event, createContext({ branchEntries: [old, checkpoint, current] }))).toEqual({ cancel: true });
+	expect(h.fallbackCalls).toHaveLength(0);
 });
 
 test("V2 failure falls through to configured-model fallback", async () => {

@@ -13,7 +13,7 @@ import { loadExtensionConfig } from "./config";
 import { redactValue, writeDebugArtifact } from "./debug";
 import { findLatestCompactionEntry, isPersistedNativeCompactionEntry, resolveLatestNativeCompactionEntry } from "./details-store";
 import { runNativeFallbackCompaction } from "./native-fallback";
-import { reconstructPortableHistory } from "./portable-history";
+import { reconstructPendingPortableHistory, reconstructPortableHistory } from "./portable-history";
 import { summarizePortableHistory } from "./portable-summary";
 import {
 	rewriteResponsesPayloadWithNativeReplay,
@@ -427,6 +427,21 @@ async function runResponsesV2Compact(
 	return { outcome: "success", compaction };
 }
 
+function sumPortableUsage(records: Array<{ usage: NonNullable<CompactionResult["usage"]> }>): CompactionResult["usage"] {
+	if (records.length === 0) return undefined;
+	const total: NonNullable<CompactionResult["usage"]> = {
+		input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	for (const { usage } of records) {
+		for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[key] += usage[key];
+		for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[key] += usage.cost[key];
+		if (usage.reasoning !== undefined) total.reasoning = (total.reasoning ?? 0) + usage.reasoning;
+		if (usage.cacheWrite1h !== undefined) total.cacheWrite1h = (total.cacheWrite1h ?? 0) + usage.cacheWrite1h;
+	}
+	return total;
+}
+
 async function handleSessionBeforeCompact(
 	event: SessionBeforeCompactEvent,
 	ctx: ExtensionContext,
@@ -434,10 +449,11 @@ async function handleSessionBeforeCompact(
 ) {
 	const { config } = dependencies.loadExtensionConfig();
 	if (!config.enabled) {
-		return undefined;
+		return event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY
+			? { cancel: true } : undefined;
 	}
 
-	writeDebugArtifact(
+	try { writeDebugArtifact(
 		"compaction-event",
 		{
 			event: "session_before_compact",
@@ -452,7 +468,7 @@ async function handleSessionBeforeCompact(
 		},
 		config,
 		ctx,
-	);
+	); } catch { /* Diagnostic storage cannot decide whether compaction proceeds. */ }
 
 	if (event.signal.aborted) {
 		return { cancel: true };
@@ -493,6 +509,37 @@ async function handleSessionBeforeCompact(
 			config,
 			ctx,
 		);
+	}
+
+	// A previous opaque checkpoint cannot be used as Pi's previousSummary for
+	// text fallback. Rebuild the pending boundary from raw, edit-aware history.
+	let priorCheckpoint: ReturnType<typeof latestOpaqueCheckpoint>;
+	try { priorCheckpoint = latestOpaqueCheckpoint(ctx.sessionManager.getBranch()); }
+	catch {
+		if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY) return { cancel: true };
+	}
+	if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY && !priorCheckpoint) {
+		return { cancel: true };
+	}
+	if (priorCheckpoint) {
+		try {
+			const source = reconstructPendingPortableHistory(ctx.sessionManager.getBranch(), event.preparation.firstKeptEntryId, priorCheckpoint);
+			if (!source.ok) { notifyWarning(ctx, `portable fallback unavailable (${source.reason})`); return { cancel: true }; }
+			const portable = await dependencies.summarizePortableHistory({
+				messages: source.messages, ctx, config, signal: event.signal, sessionId: getSessionId(ctx),
+			});
+			if (!portable.ok) { notifyWarning(ctx, `portable fallback unavailable (${portable.reason})`); return { cancel: true }; }
+			return { compaction: {
+				summary: portable.summary,
+				firstKeptEntryId: event.preparation.firstKeptEntryId,
+				tokensBefore: event.preparation.tokensBefore,
+				details: { portableSource: "raw-branch", model: portable.model, usageRecords: portable.usageRecords },
+				...(portable.usageRecords.length ? { usage: sumPortableUsage(portable.usageRecords) } : {}),
+			} };
+		} catch {
+			// Letting Pi default to the opaque marker would silently lose history.
+			return { cancel: true };
+		}
 	}
 
 	// Branch 2: try configured text models in order, without silently switching
@@ -863,9 +910,14 @@ export function registerExtensionRuntime(
 		}
 	});
 
-	pi.on("session_before_compact", (event, ctx) =>
-		handleSessionBeforeCompact(event, ctx, dependencies),
-	);
+	pi.on("session_before_compact", async (event, ctx) => {
+		try { return await handleSessionBeforeCompact(event, ctx, dependencies); }
+		catch (error) {
+			// Pi would otherwise swallow the exception and compact a placeholder.
+			if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY) return { cancel: true };
+			throw error;
+		}
+	});
 	pi.on("context", async (event, ctx) => {
 		try { return await handlePortableContext(event, ctx, pi, dependencies); }
 		catch (error) {

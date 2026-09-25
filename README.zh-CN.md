@@ -102,9 +102,9 @@ pi 触发压缩时（`session_before_compact`）：
    - **V1**：POST 到 `/responses/compact`，接收不透明的压缩窗口。
    - 成功后，压缩窗口被存储，后续请求通过 `before_provider_request` 钩子回放。
 
-2. **非 Responses API，或原生压缩失败** → 按顺序调用 `compactionModel`、`additionalCompactionModels` 执行 Pi 的文本 `compact()`；成功即停，用户中止则取消，全部失败后让 Pi 默认压缩处理仍完整的原始上下文。
+2. **非 Responses API，或尚无加密 checkpoint 时原生压缩失败** → 按顺序调用 `compactionModel`、`additionalCompactionModels` 执行 Pi 文本压缩；成功即停，用户中止则取消，全部失败才由 Pi 默认压缩处理完整上下文。**已有加密 checkpoint 时若再次原生压缩失败**，从会话原始条目重建本次应压缩的完整历史，按配置模型顺序再到当前模型生成可移植摘要；全部失败就取消，不能让 Pi 只总结占位文本。
 
-3. **原生压缩之后第一次实际请求无法回放该 checkpoint（包括 OAuth 重新路由端点）** → 按 Pi 的上下文编辑规则重建被隐藏的历史，分块生成文本摘要并存入当前分支；后续复用。切回原模型仍使用原生 checkpoint。若重建、摘要或原生回放失败，请求会明确中止，保留原会话以便重试。
+3. **原生压缩之后第一次实际请求不兼容模型** → 按 Pi 的上下文编辑规则重建被隐藏的历史，分块生成文本摘要并存入当前分支；后续复用。切回原模型仍使用原生 checkpoint。若重建、摘要或原生回放失败，请求会明确中止，保留原会话以便重试。
 
 原生压缩按 API 类型而非提供商判断。提供商报告的 V1/V2 原生用量会进入 Pi 压缩统计；按需生成的可移植摘要用量记在扩展的会话条目中，但受 Pi 当前只读扩展接口限制，暂不计入 `/session` 总量。
 
