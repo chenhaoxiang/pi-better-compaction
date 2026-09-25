@@ -48,7 +48,8 @@ function parseAddedLines(patch) {
 	let file;
 	let line = 0;
 	for (const row of patch.split(/\r?\n/)) {
-		if (row.startsWith("+++ ")) {
+		if (row.startsWith("diff --git ")) { file = undefined; line = 0; continue; }
+		if (line === 0 && row.startsWith("+++ ")) {
 			file = row.startsWith("+++ b/") ? normalizeSourcePath(row.slice(6)) : undefined;
 			continue;
 		}
@@ -125,7 +126,7 @@ function main() {
 		process.exitCode = 1;
 		return;
 	}
-	console.log(`Coverage gate OK (baseline ${baseline.sourceCommit}): lines ${coverage.totals.LH}/${coverage.totals.LF}, functions ${coverage.totals.FNH}/${coverage.totals.FNF}; changed source ${changedCovered}/${changedMeasured} measured, ${uninstrumented} not instrumented; ${branchAvailable ? "branch floor met" : "branch coverage unavailable"}`);
+	console.log(`Coverage gate OK (baseline ${baseline.sourceCommit}): lines ${coverage.totals.LH}/${coverage.totals.LF}, functions ${coverage.totals.FNH}/${coverage.totals.FNF}; changed source ${changedCovered}/${changedMeasured} measured, ${uninstrumented} not instrumented; ${branchAvailable ? "branch floor met" : "branch coverage not gated (baseline unavailable)"}`);
 }
 
 try { main(); }

@@ -43,13 +43,19 @@ test("coverage gate accepts a candidate above the pinned baseline with changed l
 	const result = checkCoverage([1, 1], changedLines);
 	expect(result.status).toBe(0);
 	expect(result.stdout).toContain("Coverage gate OK");
-	expect(result.stdout).toContain("branch coverage unavailable");
+	expect(result.stdout).toContain("branch coverage not gated");
 });
 
 test("coverage gate rejects a new uncovered source line even when aggregate coverage matches baseline", () => {
 	const result = checkCoverage([1, 0], changedLines);
 	expect(result.status).not.toBe(0);
 	expect(result.stderr).toContain("changed line");
+});
+
+test("coverage gate cannot mistake a newly added ++ line for a patch file header", () => {
+	const result = checkCoverage([1, 0], changedLines.replace("+const two = 2;", "+++ counter;"));
+	expect(result.status).not.toBe(0);
+	expect(result.stderr).toContain("changed line not covered: src/compact-client-v2.ts:11");
 });
 
 test("coverage gate rejects a regression below the pinned overall ratio", () => {

@@ -31,11 +31,13 @@ jobs:
       - name: Require coverage of changed source lines
         env:
           BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           if [ -n "$BASE_REF" ]; then
             cd "$GITHUB_WORKSPACE" && git fetch origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF" --no-tags
             cd "$GITHUB_WORKSPACE" && git diff -U0 "origin/$BASE_REF"...HEAD -- src/ > tmp/coverage/changed.patch
           else
-            cd "$GITHUB_WORKSPACE" && git diff -U0 HEAD^ HEAD -- src/ > tmp/coverage/changed.patch
+            cd "$GITHUB_WORKSPACE" && git cat-file -e "$BEFORE_SHA^{commit}"
+            cd "$GITHUB_WORKSPACE" && git diff -U0 "$BEFORE_SHA" HEAD -- src/ > tmp/coverage/changed.patch
           fi
           node scripts/check-lcov.mjs tmp/coverage/lcov.info --baseline test/coverage-baseline.json --patch tmp/coverage/changed.patch
