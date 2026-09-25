@@ -1,10 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type {
-	BranchSummaryEntry,
-	CustomMessageEntry,
-	SessionEntry,
-	SessionMessageEntry,
+import {
+	buildSessionProjection,
+	type BranchSummaryEntry,
+	type CustomMessageEntry,
+	type SessionEntry,
+	type SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ResponsesCompatibleRequestPayload } from "./runtime";
 import type { NativeCompactionEntry } from "./types";
@@ -53,6 +54,7 @@ export type NativeReplayPayloadRewriteFailureReason =
 	| "first-kept-entry-not-found"
 	| "unsupported-instructions"
 	| "invalid-compacted-window"
+	| "native-history-edited-after-checkpoint"
 	| "unexpected-compaction-after-boundary"
 	| "expected-pi-replay-mismatch";
 
@@ -407,15 +409,26 @@ export function findEntriesStrictlyAfterCompactionBoundary(
 	return entries.slice(boundaryIndex + 1);
 }
 
+function projectLinearBranch(entries: readonly SessionEntry[]) {
+	if (entries.length === 0) return [];
+	// A caller may supply only the post-checkpoint tail. Reconnect that in-memory
+	// slice so Pi applies its last-wins context_edit semantics before serialization.
+	const linked = entries.map((entry, index) => ({
+		...entry,
+		parentId: index === 0 ? null : entries[index - 1]!.id,
+	})) as SessionEntry[];
+	return buildSessionProjection(linked).entries;
+}
+
 export function collectLiveTailMessages(entries: readonly SessionEntry[]): AgentMessage[] {
-	return collectReplayMessages(entries);
+	return projectLinearBranch(entries).flatMap((entry) => entry.messages);
 }
 
 export function serializeLiveTailToResponsesInput<TApi extends Api>(args: {
 	model: Model<TApi>;
 	entries: readonly SessionEntry[];
 }): ResponsesInputItem[] {
-	return serializeMessagesToResponsesInput(args.model, collectReplayMessages(args.entries));
+	return serializeMessagesToResponsesInput(args.model, collectLiveTailMessages(args.entries));
 }
 
 function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
@@ -462,6 +475,14 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 		};
 	}
 
+	// A persisted blob cannot incorporate an edit to history it already sealed.
+	const sealedIds = new Set(args.branchEntries.slice(0, boundaryIndex).map((entry) => entry.id));
+	if (args.branchEntries.slice(boundaryIndex + 1).some((entry) =>
+		entry.type === "context_edit" && sealedIds.has(entry.targetId),
+	)) {
+		return { ok: false, reason: "native-history-edited-after-checkpoint" };
+	}
+
 	const compactedWindow = cloneOpaqueCompactedWindow(args.compactionEntry.details.compactedWindow);
 	if (!compactedWindow) {
 		return {
@@ -472,8 +493,13 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 
 	const preCompactionEntries = args.branchEntries.slice(firstKeptEntryIndex, boundaryIndex);
 	const postCompactionEntries = args.branchEntries.slice(boundaryIndex + 1);
-	const preCompactionKeptMessages = collectReplayMessages(preCompactionEntries);
-	const postCompactionTailMessages = collectReplayMessages(postCompactionEntries);
+	// Project the whole branch once so edits after the checkpoint can still
+	// replace or omit kept and tail messages before parity/replay alignment.
+	const projectedById = new Map(projectLinearBranch(args.branchEntries).map(({ sourceEntry, messages }) =>
+		[sourceEntry.id, messages] as const,
+	));
+	const preCompactionKeptMessages = preCompactionEntries.flatMap((entry) => projectedById.get(entry.id) ?? []);
+	const postCompactionTailMessages = postCompactionEntries.flatMap((entry) => projectedById.get(entry.id) ?? []);
 	const compactionSummaryMessage = createCompactionSummaryAgentMessage(args.compactionEntry);
 	const serializedPiHistoryInput = serializeMessagesToResponsesInput(args.model, [
 		compactionSummaryMessage,

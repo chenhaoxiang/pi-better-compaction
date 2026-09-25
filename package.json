@@ -39,6 +39,8 @@
     "src/details-store.ts",
     "src/extension-runtime.ts",
     "src/native-fallback.ts",
+    "src/portable-history.ts",
+    "src/portable-summary.ts",
     "src/payload-rewrite.ts",
     "src/request-context-cache.ts",
     "src/retained-messages.ts",
@@ -60,7 +62,7 @@
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": ">=0.84.3"
+    "@earendil-works/pi-coding-agent": ">=0.87.1"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "0.87.1",

@@ -2,14 +2,14 @@
 
 ## 1. High priority: prove the safe boundary
 
-- [ ] 1.1 Add provider-free local HTTP and Pi hook tests showing that `ctx.abort()` on a pending native checkpoint prevents the first incompatible request from reaching the server; verify both zero received requests and a visible aborted result.
-- [ ] 1.2 Add characterization tests for first/repeated native compaction, retain-none, fork, prior non-native summary, and omitted/replaced `context_edit` entries; verify the portable source contains exactly the projected hidden messages, no kept/tail duplication.
+- [x] 1.1 Add provider-free local HTTP and Pi hook tests showing that `ctx.abort()` on a pending native checkpoint prevents the first incompatible request from reaching the server; verify both zero received requests and a visible aborted result.
+- [x] 1.2 Add characterization tests for first/repeated native compaction, retain-none, fork, prior non-native summary, and omitted/replaced `context_edit` entries; verify the portable source contains exactly the projected hidden messages, no kept/tail duplication.
 
 ## 2. High priority: implement native-first continuity and accounting
 
 - [x] 2.1 Add backwards-compatible ordered `additionalCompactionModels` config and a non-abort fallback loop after native failure; verify Kimi-first, secondary success, abort stop, and all-fail Pi-default cases.
-- [ ] 2.2 Make native V2 replay/compaction live-tail serialization honor Pi context edits; verify omission/replacement tests pass and original tool-call/result pairing remains intact.
-- [ ] 2.3 Implement bounded, on-demand portable summarization at the first incompatible-model request, persist one branch-bound custom summary, preserve native replay on switch-back, and stop unsafe cache warming; verify reload, fork, repeated compaction, switch-without-request, and failed-summary abort tests.
+- [x] 2.2 Make native V2 replay/compaction live-tail serialization honor Pi context edits; verify omission/replacement tests pass and original tool-call/result pairing remains intact.
+- [x] 2.3 Implement bounded, on-demand portable summarization at the first incompatible-model request, persist one branch-bound custom summary, preserve native replay on switch-back, and stop unsafe cache warming; verify reload, fork, repeated compaction, switch-without-request, and failed-summary abort tests.
 - [x] 2.4 Map valid V1/V2 provider token usage into Pi `CompactionResult.usage` with model pricing; verify usage/missing-usage tests and document that later lazy calls cannot yet enter Pi `/session` totals through the public extension API.
 - [ ] 2.5 Run `openspec validate reliable-multistage-compaction --strict --no-interactive`, all provider-free tests and diff checks; prepare a high-priority fork PR, obtain one fresh-context Kimi K3 read-only review tied to the exact head, resolve blockers, then merge and pin-install only after all safety gates pass.
 
