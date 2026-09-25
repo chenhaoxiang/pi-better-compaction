@@ -104,6 +104,14 @@ function notifyWarning(ctx: ExtensionContext, message: string): void {
 	}
 }
 
+function cancelOpaqueCompaction(ctx: ExtensionContext, config: ExtensionConfig, reason: string): { cancel: true } {
+	try { notifyWarning(ctx, `native compaction cancelled to protect history (${reason})`); }
+	catch { /* Pi will still report the cancellation. */ }
+	try { writeDebugArtifact("compaction-event", { event: "opaque-compaction-cancelled", reason }, config, ctx); }
+	catch { /* Diagnostic storage is best-effort. */ }
+	return { cancel: true };
+}
+
 function cloneOpaqueWindow(window: readonly unknown[]): unknown[] {
 	return window.map((item) => structuredClone(item));
 }
@@ -450,7 +458,7 @@ async function handleSessionBeforeCompact(
 	const { config } = dependencies.loadExtensionConfig();
 	if (!config.enabled) {
 		return event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY
-			? { cancel: true } : undefined;
+			? cancelOpaqueCompaction(ctx, config, "extension-disabled") : undefined;
 	}
 
 	try { writeDebugArtifact(
@@ -516,19 +524,22 @@ async function handleSessionBeforeCompact(
 	let priorCheckpoint: ReturnType<typeof latestOpaqueCheckpoint>;
 	try { priorCheckpoint = latestOpaqueCheckpoint(ctx.sessionManager.getBranch()); }
 	catch {
-		if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY) return { cancel: true };
+		if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY) {
+			return cancelOpaqueCompaction(ctx, config, "session-branch-unavailable");
+		}
 	}
 	if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY && !priorCheckpoint) {
-		return { cancel: true };
+		return cancelOpaqueCompaction(ctx, config, "native-checkpoint-unavailable");
 	}
 	if (priorCheckpoint) {
 		try {
 			const source = reconstructPendingPortableHistory(ctx.sessionManager.getBranch(), event.preparation.firstKeptEntryId, priorCheckpoint);
-			if (!source.ok) { notifyWarning(ctx, `portable fallback unavailable (${source.reason})`); return { cancel: true }; }
+			if (!source.ok) return cancelOpaqueCompaction(ctx, config, source.reason);
 			const portable = await dependencies.summarizePortableHistory({
-				messages: source.messages, ctx, config, signal: event.signal, sessionId: getSessionId(ctx),
+				messages: source.messages, ctx, config, signal: event.signal,
+				customInstructions: event.customInstructions, sessionId: getSessionId(ctx),
 			});
-			if (!portable.ok) { notifyWarning(ctx, `portable fallback unavailable (${portable.reason})`); return { cancel: true }; }
+			if (!portable.ok) return cancelOpaqueCompaction(ctx, config, portable.reason);
 			return { compaction: {
 				summary: portable.summary,
 				firstKeptEntryId: event.preparation.firstKeptEntryId,
@@ -538,7 +549,7 @@ async function handleSessionBeforeCompact(
 			} };
 		} catch {
 			// Letting Pi default to the opaque marker would silently lose history.
-			return { cancel: true };
+			return cancelOpaqueCompaction(ctx, config, "portable-fallback-error");
 		}
 	}
 
@@ -914,7 +925,9 @@ export function registerExtensionRuntime(
 		try { return await handleSessionBeforeCompact(event, ctx, dependencies); }
 		catch (error) {
 			// Pi would otherwise swallow the exception and compact a placeholder.
-			if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY) return { cancel: true };
+			if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY) {
+				return cancelOpaqueCompaction(ctx, DEFAULT_EXTENSION_CONFIG, "unexpected-compaction-hook-error");
+			}
 			throw error;
 		}
 	});

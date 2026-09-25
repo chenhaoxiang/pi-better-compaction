@@ -104,6 +104,17 @@ test("a failed second native compaction can rebuild the pending text boundary wi
 	expect(JSON.stringify(result)).not.toContain(NATIVE_COMPACTION_FALLBACK_SUMMARY);
 });
 
+test("pending fallback projection honors a post-checkpoint edit to the hidden prefix", () => {
+	const old = user("old", null, "stale hidden fact");
+	const kept = user("kept", "old", "kept fact");
+	const checkpoint = native("native1", "kept", "kept");
+	const current = user("current", "native1", "new request kept verbatim");
+	const change = edit("change", "current", "old", [{ type: "text", text: "corrected hidden fact" }]);
+	const result = reconstructPendingPortableHistory([old, kept, checkpoint, current, change] as never, current.id, checkpoint as never);
+	expect(texts(result)).toEqual(["corrected hidden fact", "kept fact"]);
+	expect(JSON.stringify(result)).not.toContain("stale hidden fact");
+});
+
 test("retain-none checkpoint summarizes everything before its own entry", () => {
 	const old = user("old", null, "all old fact");
 	const checkpoint = native("native1", "old", "native1");

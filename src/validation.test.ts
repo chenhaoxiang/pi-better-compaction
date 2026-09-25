@@ -1170,9 +1170,13 @@ test("disabled extension or broken debug storage cannot let Pi compact an opaque
 		tokensBefore: 4096, firstKeptEntryId: current.id, previousSummary: NATIVE_COMPACTION_FALLBACK_SUMMARY,
 		messagesToSummarize: [toReplayMessage(old)], turnPrefixMessages: [],
 	} };
-	const ctx = createContext({ branchEntries: [old, checkpoint, current] });
+	const ctx = createContext({ branchEntries: [old, checkpoint, current] }) as any;
+	const notices: string[] = [];
+	ctx.hasUI = true;
+	ctx.ui = { notify: (message: string) => notices.push(message) };
 	const disabled = await loadHookHarness({ config: { enabled: false } });
 	expect(await disabled.sessionBeforeCompact(event, ctx)).toEqual({ cancel: true });
+	expect(notices.join(" ")).toContain("disabled");
 	const brokenDebug = await loadHookHarness({ config: { debug: true, artifactRoot: "/dev/null/pi-better-compaction" } });
 	expect(await brokenDebug.sessionBeforeCompact(event, ctx)).toEqual({ cancel: true });
 });
@@ -1184,7 +1188,7 @@ test("native failure after an opaque checkpoint rebuilds full portable history i
 		compactedWindow: [{ type: "compaction", encrypted_content: "opaque-prior-history" }] });
 	const current = createUserEntry("prior-current", "Keep this latest request verbatim.");
 	const branchEntries = [old, kept, checkpoint, current];
-	const event = { signal: new AbortController().signal, preparation: {
+	const event = { signal: new AbortController().signal, customInstructions: "Keep the exact synthetic decisions.", preparation: {
 		tokensBefore: 4096, firstKeptEntryId: current.id,
 		previousSummary: NATIVE_COMPACTION_FALLBACK_SUMMARY,
 		messagesToSummarize: [toReplayMessage(kept)], turnPrefixMessages: [],
@@ -1203,6 +1207,7 @@ test("native failure after an opaque checkpoint rebuilds full portable history i
 	expect(result.compaction.firstKeptEntryId).toBe(current.id);
 	expect((result.compaction as any).usage).toMatchObject({ input: 100, output: 20, cacheRead: 10, cacheWrite1h: 2, reasoning: 5, totalTokens: 132, cost: { total: 0.33 } });
 	expect(h.portableSummaryCalls).toHaveLength(1);
+	expect(h.portableSummaryCalls[0].customInstructions).toBe("Keep the exact synthetic decisions.");
 	const reconstructed = JSON.stringify(h.portableSummaryCalls[0].messages);
 	expect(reconstructed).toContain("Historic decision A");
 	expect(reconstructed).toContain("Historic decision B");
