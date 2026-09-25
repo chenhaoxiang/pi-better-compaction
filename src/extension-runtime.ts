@@ -8,7 +8,7 @@ import type {
 import { executeNativeCompaction } from "./compact-client";
 import { executeV2Compaction } from "./compact-client-v2";
 import { loadExtensionConfig } from "./config";
-import { writeDebugArtifact } from "./debug";
+import { redactValue, writeDebugArtifact } from "./debug";
 import { resolveLatestNativeCompactionEntry } from "./details-store";
 import { runNativeFallbackCompaction } from "./native-fallback";
 import {
@@ -524,7 +524,8 @@ async function handleSessionBeforeCompact(
 			errorMessage: fallback.errorMessage,
 		}, config, ctx);
 		if (fallback.reason !== "same-as-current-model" && fallback.reason !== "no-model-configured") {
-			failures.push(`${modelSpec} (${fallback.reason})`);
+			const detail = fallback.errorMessage ? `: ${String(redactValue(fallback.errorMessage)).slice(0, 200)}` : "";
+			failures.push(`${modelSpec} (${fallback.reason}${detail})`);
 		}
 	}
 

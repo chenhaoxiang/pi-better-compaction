@@ -24,6 +24,12 @@ test("ordered additional compaction models default to none", () => {
 	expect(config.config.additionalCompactionModels).toEqual([]);
 });
 
+test("a non-array backup list warns and keeps the safe empty default", () => {
+	const config = loadExtensionConfig(configFile({ additionalCompactionModels: "codex-local/gpt-backup" }));
+	expect(config.config.additionalCompactionModels).toEqual([]);
+	expect(config.warnings).toHaveLength(1);
+});
+
 test("valid additional models preserve order while malformed entries are skipped with warnings", () => {
 	const config = loadExtensionConfig(configFile({
 		compactionModel: "codex-local/kimi-k3",

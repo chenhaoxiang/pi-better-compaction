@@ -1266,6 +1266,49 @@ test("V2 abort cancels without fallback", async () => {
 	expect(result.cancel).toBe(true);
 });
 
+test("failed configured fallback retains provider diagnostics in the user warning", async () => {
+	const user = createUserEntry("warning-user", "Keep this context.");
+	const { sessionBeforeCompact } = await loadHookHarness({
+		config: { compactionModel: "codex-local/kimi-k3" },
+		v2CompactResult: { ok: false, reason: "non-2xx" },
+		nativeFallbackResult: { ok: false, reason: "auth-failed", errorMessage: "synthetic OAuth expired" },
+	});
+	const notices: string[] = [];
+	const ctx = createContext({ sessionContextMessages: [toReplayMessage(user)] }) as any;
+	ctx.hasUI = true;
+	ctx.ui = { notify: (message: string) => notices.push(message) };
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	expect(await sessionBeforeCompact(event, ctx)).toBeUndefined();
+	expect(notices.join(" ")).toContain("synthetic OAuth expired");
+});
+
+test("an unset or same-as-current primary still reaches an explicitly configured backup", async () => {
+	const user = createUserEntry("backup-user", "Need a backup summary.");
+	const portable = { summary: "## Goal\nBackup kept the history.", firstKeptEntryId: user.id, tokensBefore: 512 };
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	for (const primary of [undefined, "codex-local/kimi-k3"]) {
+		const h = await loadHookHarness({
+			config: { compactionModel: primary, additionalCompactionModels: ["codex-local/gpt-backup"] },
+			v2CompactResult: { ok: false, reason: "non-2xx" },
+			nativeFallbackResultsByModel: {
+				"codex-local/kimi-k3": { ok: false, reason: "same-as-current-model" },
+				"codex-local/gpt-backup": { ok: true, result: portable, model: { provider: "codex-local", id: "gpt-backup" } },
+			},
+		});
+		const result = await h.sessionBeforeCompact(event, createContext({ sessionContextMessages: [toReplayMessage(user)] })) as { compaction: unknown };
+		expect(result.compaction).toEqual(portable);
+		expect(h.fallbackCalls.map((call) => (call.config as ExtensionConfig).compactionModel)).toEqual(
+			primary ? [primary, "codex-local/gpt-backup"] : ["codex-local/gpt-backup"],
+		);
+	}
+});
+
 test("native success does not call any configured text fallback model", async () => {
 	const user = createUserEntry("native-first-user", "Keep the native checkpoint.");
 	const { sessionBeforeCompact, fallbackCalls } = await loadHookHarness({
