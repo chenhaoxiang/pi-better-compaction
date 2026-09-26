@@ -282,6 +282,7 @@ function createContext(args: {
 		getSystemPrompt: () => args.systemPrompt ?? "Current instructions v1",
 		model,
 		modelRegistry: {
+			getAll: () => args.registryModels ?? [],
 			find: (provider: string, modelId: string) =>
 				(args.registryModels ?? []).find((entry) => entry.provider === provider && entry.id === modelId),
 			getApiKeyAndHeaders: async () => {
@@ -306,6 +307,8 @@ function createContext(args: {
 async function loadHookHarness(options: HookHarnessOptions = {}): Promise<{
 	sessionBeforeCompact: HookHandler;
 	beforeProviderRequest: HookHandler;
+	sessionCompact: HookHandler;
+	sessionCompactFailed: HookHandler;
 	compactCalls: Array<Record<string, unknown>>;
 	v2CompactCalls: Array<Record<string, unknown>>;
 	fallbackCalls: Array<Record<string, unknown>>;
@@ -376,13 +379,17 @@ async function loadHookHarness(options: HookHarnessOptions = {}): Promise<{
 
 	const sessionBeforeCompact = handlers.get("session_before_compact");
 	const beforeProviderRequest = handlers.get("before_provider_request");
-	if (!sessionBeforeCompact || !beforeProviderRequest) {
+	const sessionCompact = handlers.get("session_compact");
+	const sessionCompactFailed = handlers.get("session_compact_failed");
+	if (!sessionBeforeCompact || !beforeProviderRequest || !sessionCompact || !sessionCompactFailed) {
 		throw new Error("Expected pi-better-compaction hooks to register");
 	}
 
 	return {
 		sessionBeforeCompact,
 		beforeProviderRequest,
+		sessionCompact,
+		sessionCompactFailed,
 		compactCalls,
 		v2CompactCalls,
 		fallbackCalls,
@@ -1426,6 +1433,22 @@ test("native success does not call any configured text fallback model", async ()
 	expect(fallbackCalls).toHaveLength(0);
 });
 
+test("native success does not call local-priority text candidates", async () => {
+	const user = createUserEntry("native-local-user", "Preserve the native checkpoint.");
+	const h = await loadHookHarness({
+		config: { localCompactionModels: [{ modelId: "gpt-6-sol", thinkingLevel: "max" }] },
+		v2CompactResult: { ok: true, compactionItem: { type: "compaction", encrypted_content: "opaque" } },
+	});
+	const ctx = createContext({ sessionContextMessages: [toReplayMessage(user)], registryModels: [{ provider: "codex-local", id: "gpt-6-sol" }] });
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	const result = await h.sessionBeforeCompact(event, ctx) as { compaction: { details: { strategy: string } } };
+	expect(result.compaction.details.strategy).toBe("openai-native-compact-v2");
+	expect(h.fallbackCalls).toHaveLength(0);
+});
+
 test("native failure tries configured text models in order and stops at the first success", async () => {
 	const user = createUserEntry("ordered-user", "Summarize this history.");
 	const portable = { summary: "## Goal\nContinue this task.", firstKeptEntryId: user.id, tokensBefore: 512 };
@@ -1450,6 +1473,116 @@ test("native failure tries configured text models in order and stops at the firs
 		"codex-local/kimi-k3",
 		"codex-local/gpt-5.6-sol",
 	]);
+});
+
+test("default fallback is announced only after Pi confirms successful compaction", async () => {
+	const user = createUserEntry("default-method-user", "Keep this context.");
+	const h = await loadHookHarness({ v2CompactResult: { ok: false, reason: "non-2xx" } });
+	const statuses: Array<string | undefined> = [];
+	const notices: string[] = [];
+	const ctx = createContext({ sessionContextMessages: [toReplayMessage(user)] }) as any;
+	ctx.hasUI = true;
+	ctx.ui = { notify: (message: string) => notices.push(message), setStatus: (_key: string, value?: string) => statuses.push(value) };
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	expect(await h.sessionBeforeCompact(event, ctx)).toBeUndefined();
+	expect(statuses.at(-1)).toContain("Pi default text compaction");
+	expect(notices.some((notice) => notice.includes("default text compaction completed"))).toBe(false);
+	await h.sessionCompact({ fromExtension: false, compactionEntry: {} }, ctx);
+	expect(statuses.at(-1)).toBeUndefined();
+	expect(notices.some((notice) => notice.includes("Pi default text compaction completed"))).toBe(true);
+});
+
+test("failed Pi-default compaction clears the transient method without reporting success", async () => {
+	const user = createUserEntry("failed-method-user", "Keep this context.");
+	const h = await loadHookHarness({ v2CompactResult: { ok: false, reason: "non-2xx" } });
+	const statuses: Array<string | undefined> = [];
+	const notices: string[] = [];
+	const ctx = createContext({ sessionContextMessages: [toReplayMessage(user)] }) as any;
+	ctx.hasUI = true;
+	ctx.ui = { notify: (message: string) => notices.push(message), setStatus: (_key: string, value?: string) => statuses.push(value) };
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	expect(await h.sessionBeforeCompact(event, ctx)).toBeUndefined();
+	await h.sessionCompactFailed({ reason: "manual", aborted: false, fromExtension: false }, ctx);
+	expect(statuses.at(-1)).toBeUndefined();
+	expect(notices.some((notice) => notice.includes("default text compaction completed"))).toBe(false);
+});
+
+test("registry failure reports its own cause instead of mislabeling every model as unregistered", async () => {
+	const user = createUserEntry("registry-error-user", "Preserve history.");
+	const h = await loadHookHarness({
+		config: { localCompactionModels: [{ modelId: "gpt-6-sol", thinkingLevel: "max" }] },
+		v2CompactResult: { ok: false, reason: "non-2xx" },
+	});
+	const notices: string[] = [];
+	const ctx = createContext({ sessionContextMessages: [toReplayMessage(user)] }) as any;
+	ctx.modelRegistry.getAll = () => { throw new Error("synthetic registry failure"); };
+	ctx.hasUI = true;
+	ctx.ui = { notify: (message: string) => notices.push(message) };
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	expect(await h.sessionBeforeCompact(event, ctx)).toBeUndefined();
+	expect(h.fallbackCalls).toHaveLength(0);
+	expect(notices.join(" ")).toContain("local model registry unavailable");
+	expect(notices.join(" ")).not.toContain("not-registered-local");
+});
+
+test("local-name model priority skips unavailable candidates, uses per-model thinking, and reports the method", async () => {
+	const user = createUserEntry("local-priority-user", "Preserve the compacted context.");
+	const portable = { summary: "## Goal\nLocal Astra kept history.", firstKeptEntryId: user.id, tokensBefore: 512 };
+	const h = await loadHookHarness({
+		config: {
+			compactionModel: "codex-local/legacy-ignored",
+			localCompactionModels: [
+				{ modelId: "gpt-6-sol", thinkingLevel: "max" },
+				{ modelId: "kimi-k3", thinkingLevel: "max" },
+				{ modelId: "gpt-6-astra", thinkingLevel: "high" },
+			],
+		},
+		v2CompactResult: { ok: false, reason: "non-2xx" },
+		nativeFallbackResultsByModel: {
+			"codex-local/gpt-6-sol": { ok: false, reason: "auth-failed" },
+			"codex-local/gpt-6-astra": { ok: true, result: portable, model: { provider: "codex-local", id: "gpt-6-astra" } },
+		},
+	});
+	const statuses: Array<string | undefined> = [];
+	const notices: string[] = [];
+	const ctx = createContext({
+		sessionContextMessages: [toReplayMessage(user)],
+		registryModels: [
+			{ provider: "qoder-cli", id: "kimi-k3" },
+			{ provider: "codex-local", id: "gpt-6-sol" },
+			{ provider: "codex-local", id: "gpt-6-astra" },
+		],
+	}) as any;
+	ctx.hasUI = true;
+	ctx.ui = { notify: (message: string) => notices.push(message), setStatus: (_key: string, value?: string) => statuses.push(value) };
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	const result = await h.sessionBeforeCompact(event, ctx) as { compaction: unknown };
+	expect(result.compaction).toEqual(portable);
+	expect(h.fallbackCalls.map((call) => ({
+		model: (call.config as ExtensionConfig).compactionModel,
+		thinking: call.thinkingLevel,
+		allowCurrent: call.allowCurrentModel,
+	}))).toEqual([
+		{ model: "codex-local/gpt-6-sol", thinking: "max", allowCurrent: true },
+		{ model: "codex-local/gpt-6-astra", thinking: "high", allowCurrent: true },
+	]);
+	expect(statuses.some((status) => status?.includes("native"))).toBe(true);
+	expect(statuses.some((status) => status?.includes("gpt-6-astra"))).toBe(true);
+	expect(notices.some((notice) => notice.includes("gpt-6-astra"))).toBe(true);
+	await h.sessionCompact({ fromExtension: true, compactionEntry: { details: {} } }, ctx);
+	expect(statuses.at(-1)).toBeUndefined();
 });
 
 test("all configured text models failing returns control to Pi default, but abort stops the chain", async () => {

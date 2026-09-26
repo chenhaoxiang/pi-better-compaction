@@ -41,6 +41,7 @@ If the file doesn't exist, all defaults apply. The extension never creates this 
   "compactionVersion": "v2",
   "compactionModel": null,
   "additionalCompactionModels": [],
+  "localCompactionModels": [],
   "compactionThinkingLevel": "off",
   "responsesCompactApis": ["openai-responses", "openai-codex-responses"],
   "allowCompactionContinuityBreak": false,
@@ -63,7 +64,8 @@ If the file doesn't exist, all defaults apply. The extension never creates this 
 | `compactionVersion` | `"v1" \| "v2"` | `"v2"` | Protocol for Responses-family APIs. **V2** (streaming, encrypted blob) is the current OpenAI default. **V1** uses the legacy `/responses/compact` endpoint. |
 | `compactionModel` | `string \| null` | `null` | First text fallback after native failure and first portable summarizer on an actual incompatible-model request. Format: `"provider/model-id"`; `null` skips this candidate. |
 | `additionalCompactionModels` | `string[]` | `[]` | Additional text summarizers tried in order after `compactionModel`, before Pi's default/current model. Invalid entries are skipped with warnings; duplicates are attempted once. |
-| `compactionThinkingLevel` | `string` | `"off"` | Thinking level for the fallback compaction model. One of: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| `localCompactionModels` | `{modelId, thinkingLevel}[]` | `[]` | When nonempty, replaces the two explicit-provider lists with ordered model-ID priorities. Only models registered in Pi whose provider name contains the exact substring `local` qualify. Multiple qualifying providers for one ID are attempted in provider-name order. Missing or unauthenticated candidates are skipped; a failed compaction moves to the next candidate without a separate live probe. |
+| `compactionThinkingLevel` | `string` | `"off"` | Thinking level for the legacy explicit-provider fallback. Each `localCompactionModels` entry uses its own level. One of: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `responsesCompactApis` | `string[]` | `["openai-responses", "openai-codex-responses"]` | Which Responses APIs use native compaction. Can only narrow the built-in set; unknown entries are ignored with a warning. |
 | `allowCompactionContinuityBreak` | `boolean` | `false` | Allow restarting native compaction when the latest session compaction was created by pi's default path (not this extension). Sacrifices opaque-window continuity at that boundary. |
 | `notifyOnLoad` | `boolean` | `false` | Show a notification in the TUI when the extension loads. |
@@ -85,6 +87,20 @@ If the file doesn't exist, all defaults apply. The extension never creates this 
 
 Model entries are explicit provider/model choices. Do not put an untrusted relay in this list unless its own directory and content policy permits it.
 
+### Example: local model-ID priority
+
+```json
+{
+  "localCompactionModels": [
+    { "modelId": "gpt-6-sol", "thinkingLevel": "max" },
+    { "modelId": "kimi-k3", "thinkingLevel": "max" },
+    { "modelId": "gpt-6-astra", "thinkingLevel": "high" }
+  ]
+}
+```
+
+Native Responses compaction **still runs first**. If it fails, the above text models run in order; Pi's default text compaction runs last before any opaque checkpoint exists. On an incompatible request **after** a native checkpoint, the same priority is used for a portable summary, followed by the active model; if none can safely summarize, the request is aborted. A successful candidate stops the chain. Registration and auth are checked without sending an extra model-probe request; actual compaction errors advance to the next candidate. The `local` name filter is **not proof of a local endpoint or trusted transport**; inspect provider configuration separately. Pi's native and default/current-model paths are not restricted by this candidate filter. If a preferred candidate is the active model, the extension explicitly calls Pi's `compact()` at the configured thinking level; unlike Pi's default path, this call has no Pi streaming callback, though the method remains visible in the status bar.
+
 ### Example: force V1 compaction protocol
 
 ```json
@@ -102,11 +118,11 @@ When pi triggers compaction (`session_before_compact`):
    - **V1**: POSTs to `/responses/compact`; receives an opaque compacted window.
    - On success, the compacted window is stored and replayed on subsequent requests via `before_provider_request`.
 
-2. **Not a Responses API, or native compact failed before any opaque checkpoint** → try `compactionModel`, then `additionalCompactionModels` in order using Pi's text `compact()`. On success stop; on abort cancel; if all configured models fail, Pi's default compaction receives the still-full context. **If a prior opaque checkpoint exists and a new native attempt fails**, rebuild the full pending history from raw session entries and try the configured portable summarizers followed by the current model; if all fail, cancel instead of asking Pi to summarize a marker.
+2. **Not a Responses API, or native compact failed before any opaque checkpoint** → try `localCompactionModels` when nonempty (otherwise `compactionModel` then `additionalCompactionModels`) using Pi's text `compact()`. On success stop; on abort cancel; if all configured models fail, Pi's default compaction receives the still-full context. **If a prior opaque checkpoint exists and a new native attempt fails**, rebuild the full pending history from raw session entries and try the configured portable summarizers followed by the current model; if all fail, cancel instead of asking Pi to summarize a marker.
 
 3. **After a native checkpoint, on the first actual incompatible-model request** → rebuild the branch's hidden history with Pi context edits, produce a bounded portable text summary with the same configured model order (then the selected model), and persist it as branch-sensitive non-context state. On subsequent requests reuse it; on the original model keep native replay. Mixed-model history follows Pi's Responses serialization: foreign reasoning signatures are not replayed to the native model, and text/tool IDs are normalized for both compaction and checkpoint replay. Provider-free tests compare the local serializer with Pi's converter. If summarization or replay cannot proceed safely, abort the request and keep the session intact.
 
-Selection is by API type, not provider — any compatible Responses API gets a native attempt. A terminal V2 SSE `response.failed`/`error` is not retried. An incomplete stream after a compaction item is never persisted or automatically retried; a pre-output transport interruption may use the bounded retry policy before falling through to text compaction. Native V1/V2 usage enters Pi's compaction totals when the provider reports it. On-demand portable-summary usage is stored with its custom session entry for audit but cannot currently enter Pi `/session` totals through the read-only extension session API.
+When a UI is available, compaction shows the current method and model in the status bar; a notification identifies a successful native checkpoint, text/portable summary, or confirmed Pi-default completion. Selection of the native method is by API type, not provider — any compatible Responses API gets a native attempt. A terminal V2 SSE `response.failed`/`error` is not retried. An incomplete stream after a compaction item is never persisted or automatically retried; a pre-output transport interruption may use the bounded retry policy before falling through to text compaction. Native V1/V2 usage enters Pi's compaction totals when the provider reports it. On-demand portable-summary usage is stored with its custom session entry for audit but cannot currently enter Pi `/session` totals through the read-only extension session API.
 
 **Do not uninstall or downgrade this fork while an active session depends on an opaque checkpoint.** Removing the extension also removes its request guard; an older version can send the placeholder without the hidden context. Finish or verify a portable continuation first, or keep the pinned version for that session.
 

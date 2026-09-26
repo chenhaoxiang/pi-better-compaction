@@ -38,6 +38,7 @@
     "src/debug.ts",
     "src/details-store.ts",
     "src/extension-runtime.ts",
+    "src/model-candidates.ts",
     "src/native-fallback.ts",
     "src/portable-history.ts",
     "src/portable-summary.ts",

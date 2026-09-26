@@ -31,6 +31,7 @@ function harness(opts: { fail?: boolean; failWithUsage?: boolean; initialEntries
 	const entries: any[] = opts.initialEntries ? [...opts.initialEntries] : [old, kept, checkpoint, tail];
 	const generated: string[][] = [];
 	const notices: string[] = [];
+	const statuses: Array<string | undefined> = [];
 	let aborted = 0;
 	registerExtensionRuntime({
 		on: (name: string, handler: (event: any, ctx: any) => any) => handlers.set(name, handler),
@@ -49,8 +50,9 @@ function harness(opts: { fail?: boolean; failWithUsage?: boolean; initialEntries
 		executeNativeCompaction: async () => ({ ok: false, reason: "non-2xx" }) as never,
 		executeV2Compaction: async () => ({ ok: false, reason: "non-2xx" }) as never,
 		runNativeFallbackCompaction: async () => ({ ok: false, reason: "no-model-configured" }) as never,
-		summarizePortableHistory: async ({ messages }: { messages: Array<{ content?: unknown }> }) => {
+		summarizePortableHistory: async ({ messages, onCandidate }: { messages: Array<{ content?: unknown }>; onCandidate?: (candidate: { spec: string; thinkingLevel: string }) => void }) => {
 			generated.push(messages.map((message) => JSON.stringify(message)));
+			onCandidate?.({ spec: "codex-local/kimi-k3", thinkingLevel: "max" });
 			return opts.fail || opts.failWithUsage
 				? { ok: false, reason: "all-models-failed", usageRecords: opts.failWithUsage ? [{ provider: "codex-local", model: "kimi-k3", usage: { input: 10, output: 2, totalTokens: 12, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }] : [] }
 				: { ok: true, summary: "## Goal\nPortable decision A", model: { provider: "codex-local", id: "kimi-k3" }, usageRecords: [] };
@@ -59,7 +61,7 @@ function harness(opts: { fail?: boolean; failWithUsage?: boolean; initialEntries
 	const makeCtx = (model = switchedModel) => ({
 		model,
 		hasUI: true,
-		ui: { notify: (text: string) => notices.push(text) },
+		ui: { notify: (text: string) => notices.push(text), setStatus: (_key: string, text?: string) => statuses.push(text) },
 		signal: new AbortController().signal,
 		cwd: "/synthetic",
 		getSystemPrompt: () => "Synthetic prompt",
@@ -72,7 +74,7 @@ function harness(opts: { fail?: boolean; failWithUsage?: boolean; initialEntries
 		},
 		abort: () => { aborted++; },
 	});
-	return { handlers, entries, generated, notices, makeCtx, get aborted() { return aborted; } };
+	return { handlers, entries, generated, notices, statuses, makeCtx, get aborted() { return aborted; } };
 }
 
 test("first incompatible request generates and caches portable text, but switching back never calls Kimi", async () => {
@@ -87,6 +89,9 @@ test("first incompatible request generates and caches portable text, but switchi
 	expect(h.generated[0].join(" ")).toContain("Hidden decision A");
 	expect(h.generated[0].join(" ")).not.toContain("Kept fact");
 	expect(h.entries.at(-1).type).toBe("custom");
+	expect(h.statuses.some((text) => text?.includes("cross-model portable summary codex-local/kimi-k3"))).toBe(true);
+	expect(h.statuses.at(-1)).toBeUndefined();
+	expect(h.notices.some((text) => text.includes("cross-model portable summary"))).toBe(true);
 
 	const resumed = harness({ initialEntries: h.entries });
 	const resumedResult = await resumed.handlers.get("context")!({ messages: originalMessages }, resumed.makeCtx());

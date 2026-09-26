@@ -1,6 +1,7 @@
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { convertToLlm, generateSummaryWithUsage, serializeConversation, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getTextCompactionCandidates, type TextCompactionCandidate } from "./model-candidates";
 import type { ExtensionConfig } from "./types";
 
 type Auth = { apiKey?: string; headers?: Record<string, string | null>; env?: Record<string, string> };
@@ -76,6 +77,7 @@ export async function summarizePortableHistory(args: {
 	maxChunkBytes?: number;
 	customInstructions?: string;
 	generate?: PortableSummaryGenerator;
+	onCandidate?: (candidate: TextCompactionCandidate) => void;
 }): Promise<PortableSummaryResult> {
 	const { messages, ctx, config, signal } = args;
 	const usageRecords: PortableUsageRecord[] = [];
@@ -89,13 +91,14 @@ export async function summarizePortableHistory(args: {
 		};
 	}
 
-	const candidates = [config.compactionModel, ...config.additionalCompactionModels,
-		...(ctx.model ? [`${ctx.model.provider}/${ctx.model.id}`] : [])];
-	const seen = new Set<string>();
+	const { candidates } = getTextCompactionCandidates(config, ctx.modelRegistry);
+	const activeSpec = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+	if (activeSpec && !candidates.some((candidate) => candidate.spec === activeSpec)) {
+		candidates.push({ spec: activeSpec, thinkingLevel: ctx.thinkingLevel ?? config.compactionThinkingLevel });
+	}
 	const generate = args.generate ?? defaultGenerate;
-	for (const spec of candidates) {
-		if (!spec || seen.has(spec)) continue;
-		seen.add(spec);
+	for (const candidate of candidates) {
+		const { spec } = candidate;
 		const slash = spec.indexOf("/");
 		if (slash <= 0 || slash === spec.length - 1) continue;
 		let model: Model<Api> | undefined;
@@ -118,6 +121,7 @@ export async function summarizePortableHistory(args: {
 			continue;
 		}
 
+		try { args.onCandidate?.(candidate); } catch { /* UI feedback must not decide summarization. */ }
 		let summary: string | undefined;
 		let failed = false;
 		for (const chunk of chunks) {
@@ -133,9 +137,9 @@ export async function summarizePortableHistory(args: {
 					auth,
 					previousSummary: summary,
 					customInstructions: args.customInstructions,
-					thinkingLevel: spec === `${ctx.model?.provider}/${ctx.model?.id}`
-						? (ctx.thinkingLevel ?? config.compactionThinkingLevel)
-						: config.compactionThinkingLevel,
+					thinkingLevel: spec === activeSpec && config.localCompactionModels.length === 0
+						? (ctx.thinkingLevel ?? candidate.thinkingLevel)
+						: candidate.thinkingLevel,
 					signal,
 					sessionId: args.sessionId,
 					reserveTokens,

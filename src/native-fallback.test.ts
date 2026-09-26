@@ -136,6 +136,24 @@ describe("runNativeFallbackCompaction", () => {
 		});
 	});
 
+	test("local preference may explicitly compact with the current model at its own thinking level", async () => {
+		const model = { provider: "codex-local", id: "gpt-6-sol" };
+		let level: unknown;
+		const result = await runNativeFallbackCompaction({
+			ctx: createCtx({ currentModel: model, registryModels: [model] }),
+			event: createEvent(),
+			config: createConfig({ compactionModel: "codex-local/gpt-6-sol" }),
+			allowCurrentModel: true,
+			thinkingLevel: "max",
+			compactFn: (async (...args: unknown[]) => {
+				level = args[6];
+				return { summary: "portable", firstKeptEntryId: "entry-keep", tokensBefore: 1234 };
+			}) as never,
+		});
+		expect(result.ok).toBe(true);
+		expect(level).toBe("max");
+	});
+
 	test("returns auth-failed when the registry reports an auth error", async () => {
 		const { runNativeFallbackCompaction } = await loadNativeFallbackModule();
 

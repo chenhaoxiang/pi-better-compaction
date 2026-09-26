@@ -11,6 +11,7 @@ import {
 	type CompactionVersion,
 	type ExtensionConfig,
 	type LoadedExtensionConfig,
+	type LocalCompactionModel,
 } from "./types";
 
 export const CONFIG_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", EXTENSION_ID);
@@ -106,6 +107,32 @@ function toAdditionalCompactionModels(value: unknown, warnings: string[]): strin
 	return accepted;
 }
 
+function toLocalCompactionModels(value: unknown, warnings: string[]): LocalCompactionModel[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) {
+		warnings.push("Ignoring localCompactionModels: expected an array of {modelId, thinkingLevel} objects.");
+		return undefined;
+	}
+	const accepted: LocalCompactionModel[] = [];
+	const seen = new Set<string>();
+	for (const [index, item] of value.entries()) {
+		const modelId = isRecord(item) && typeof item.modelId === "string" ? item.modelId.trim() : "";
+		const level = isRecord(item) ? item.thinkingLevel : undefined;
+		if (!modelId || modelId.includes("/") || /\s/.test(modelId) ||
+			typeof level !== "string" || !(THINKING_LEVELS as readonly string[]).includes(level)) {
+			warnings.push(`Ignoring localCompactionModels[${index}]: expected a model ID without provider and a valid thinkingLevel.`);
+			continue;
+		}
+		if (seen.has(modelId)) {
+			warnings.push(`Ignoring localCompactionModels[${index}]: duplicate model ID ${modelId}.`);
+			continue;
+		}
+		seen.add(modelId);
+		accepted.push({ modelId, thinkingLevel: level as ThinkingLevel });
+	}
+	return accepted;
+}
+
 function toThinkingLevel(value: unknown, fieldPath: string, warnings: string[]): ThinkingLevel | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value)) {
@@ -156,6 +183,7 @@ export function loadExtensionConfig(configPath: string = CONFIG_PATH): LoadedExt
 		...DEFAULT_EXTENSION_CONFIG,
 		responsesCompactApis: [...DEFAULT_EXTENSION_CONFIG.responsesCompactApis],
 		additionalCompactionModels: [...DEFAULT_EXTENSION_CONFIG.additionalCompactionModels],
+		localCompactionModels: [...DEFAULT_EXTENSION_CONFIG.localCompactionModels],
 	};
 	let source: string | undefined;
 
@@ -184,6 +212,8 @@ export function loadExtensionConfig(configPath: string = CONFIG_PATH): LoadedExt
 
 		resolved.additionalCompactionModels =
 			toAdditionalCompactionModels(raw.additionalCompactionModels, warnings) ?? resolved.additionalCompactionModels;
+		resolved.localCompactionModels =
+			toLocalCompactionModels(raw.localCompactionModels, warnings) ?? resolved.localCompactionModels;
 
 		resolved.compactionThinkingLevel =
 			toThinkingLevel(raw.compactionThinkingLevel, "compactionThinkingLevel", warnings) ??
