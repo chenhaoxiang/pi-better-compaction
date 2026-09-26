@@ -1,3 +1,4 @@
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
 	compact,
 	type CompactionResult,
@@ -96,6 +97,8 @@ export async function runNativeFallbackCompaction(args: {
 	config: ExtensionConfig;
 	compactFn?: NativeCompactFn;
 	sessionId?: string;
+	thinkingLevel?: ThinkingLevel;
+	allowCurrentModel?: boolean;
 }): Promise<NativeFallbackResult> {
 	const { ctx, event, config } = args;
 	const compactFn = args.compactFn ?? compact;
@@ -115,7 +118,7 @@ export async function runNativeFallbackCompaction(args: {
 		return { ok: false, reason: "model-not-found", modelSpec: spec };
 	}
 
-	if (ctx.model && ctx.model.provider === model.provider && ctx.model.id === model.id) {
+	if (!args.allowCurrentModel && ctx.model && ctx.model.provider === model.provider && ctx.model.id === model.id) {
 		return { ok: false, reason: "same-as-current-model", modelSpec: spec };
 	}
 
@@ -137,7 +140,7 @@ export async function runNativeFallbackCompaction(args: {
 			filterNullHeaders(auth.headers),
 			event.customInstructions,
 			event.signal,
-			config.compactionThinkingLevel,
+			args.thinkingLevel ?? config.compactionThinkingLevel,
 			undefined, // streamFn
 			auth.env,
 			undefined, // retry (use pi defaults)

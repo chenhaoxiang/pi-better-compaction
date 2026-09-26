@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadExtensionConfig } from "./config";
+import { getTextCompactionCandidates, resolveLocalCompactionModels } from "./model-candidates";
 import { DEFAULT_EXTENSION_CONFIG } from "./types";
 
 let tempDirs: string[] = [];
@@ -20,6 +21,71 @@ afterEach(() => {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 	tempDirs = [];
+});
+
+describe("user-authored local model priorities", () => {
+	const preferences = [
+		{ modelId: "gpt-6-sol", thinkingLevel: "max" as const },
+		{ modelId: "kimi-k3", thinkingLevel: "max" as const },
+		{ modelId: "gpt-6-astra", thinkingLevel: "high" as const },
+	];
+
+	test("matches exact model IDs only in registered local-named providers, preserving model order", () => {
+		const result = resolveLocalCompactionModels(preferences, [
+			{ provider: "qoder-cli", id: "kimi-k3" },
+			{ provider: "codex-local-8319", id: "gpt-6-sol" },
+			{ provider: "codex-local", id: "gpt-6-sol" },
+			{ provider: "codex-local", id: "kimi-k3" },
+			{ provider: "codex-local", id: "gpt-6-astra" },
+			{ provider: "codex-local", id: "gpt-6-astra-variant" },
+		]);
+		expect(result).toEqual({
+			candidates: [
+				{ spec: "codex-local/gpt-6-sol", thinkingLevel: "max" },
+				{ spec: "codex-local-8319/gpt-6-sol", thinkingLevel: "max" },
+				{ spec: "codex-local/kimi-k3", thinkingLevel: "max" },
+				{ spec: "codex-local/gpt-6-astra", thinkingLevel: "high" },
+			],
+			missing: [],
+		});
+	});
+
+	test("skips unregistered models and non-local providers without treating provider names as trust proof", () => {
+		expect(resolveLocalCompactionModels(preferences, [
+			{ provider: "qoder-cli", id: "kimi-k3" },
+			{ provider: "codex-local", id: "gpt-6-sol" },
+		])).toEqual({
+			candidates: [{ spec: "codex-local/gpt-6-sol", thinkingLevel: "max" }],
+			missing: ["kimi-k3", "gpt-6-astra"],
+		});
+	});
+
+	test("a registry read failure does not select unverified local candidates", () => {
+		const result = getTextCompactionCandidates(
+			{ ...DEFAULT_EXTENSION_CONFIG, localCompactionModels: preferences },
+			{ getAll: () => { throw new Error("synthetic registry error"); } },
+		);
+		expect(result).toEqual({ candidates: [], missing: ["gpt-6-sol", "kimi-k3", "gpt-6-astra"] });
+	});
+
+	test("invalid local-priority container warns and preserves the safe empty default", () => {
+		const loaded = loadExtensionConfig(writeTempConfig(JSON.stringify({ localCompactionModels: "gpt-6-sol" })));
+		expect(loaded.config.localCompactionModels).toEqual([]);
+		expect(loaded.warnings).toHaveLength(1);
+	});
+
+	test("parses per-model thinking levels and ignores malformed or repeated preferences", () => {
+		const configPath = writeTempConfig(JSON.stringify({ localCompactionModels: [
+			{ modelId: " gpt-6-sol ", thinkingLevel: "max" },
+			{ modelId: "kimi-k3", thinkingLevel: "max" },
+			{ modelId: "gpt-6-sol", thinkingLevel: "low" },
+			{ modelId: "codex-local/gpt-6-astra", thinkingLevel: "high" },
+			{ modelId: "gpt-6-astra", thinkingLevel: "high" },
+		] }));
+		const loaded = loadExtensionConfig(configPath);
+		expect(loaded.config.localCompactionModels).toEqual(preferences);
+		expect(loaded.warnings).toHaveLength(2);
+	});
 });
 
 describe("loadExtensionConfig", () => {

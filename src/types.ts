@@ -28,6 +28,11 @@ export const THINKING_LEVELS: readonly ThinkingLevel[] = [
 export type CompactionVersion = "v1" | "v2";
 export const COMPACTION_VERSIONS: readonly CompactionVersion[] = ["v1", "v2"];
 
+export type LocalCompactionModel = {
+	modelId: string;
+	thinkingLevel: ThinkingLevel;
+};
+
 export type DebugArtifactKind =
 	| "provider-request"
 	| "compact-response"
@@ -48,6 +53,8 @@ export type ExtensionConfig = {
 	compactionModel?: string;
 	/** Ordered text-compaction candidates after compactionModel and before Pi's default. */
 	additionalCompactionModels: string[];
+	/** Model-ID priorities across registered provider names containing "local". Nonempty replaces the legacy explicit list. */
+	localCompactionModels: LocalCompactionModel[];
 	/** Thinking level passed to pi's native compact() when the fallback model runs. */
 	compactionThinkingLevel: ThinkingLevel;
 	/** Subset of RESPONSES_COMPACT_CAPABLE_APIS that should use the compact endpoint. */
@@ -313,6 +320,7 @@ export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
 	allowCompactionContinuityBreak: false,
 	compactionModel: undefined,
 	additionalCompactionModels: [],
+	localCompactionModels: [],
 	compactionThinkingLevel: "off",
 	responsesCompactApis: [...RESPONSES_COMPACT_CAPABLE_APIS],
 	compactionVersion: "v2",

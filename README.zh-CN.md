@@ -41,6 +41,7 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@main
   "compactionVersion": "v2",
   "compactionModel": null,
   "additionalCompactionModels": [],
+  "localCompactionModels": [],
   "compactionThinkingLevel": "off",
   "responsesCompactApis": ["openai-responses", "openai-codex-responses"],
   "allowCompactionContinuityBreak": false,
@@ -63,7 +64,8 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@main
 | `compactionVersion` | `"v1" \| "v2"` | `"v2"` | Responses 系列 API 的压缩协议。**V2**（流式，加密 blob）是 OpenAI 当前默认协议；**V1** 使用旧版 `/responses/compact` 端点。 |
 | `compactionModel` | `string \| null` | `null` | 原生失败后的第一文本回退模型，也是实际跨模型请求时首个可移植摘要候选。格式为 `"provider/model-id"`；`null` 表示跳过此候选。 |
 | `additionalCompactionModels` | `string[]` | `[]` | 在 `compactionModel` 之后依次尝试的其他文本模型，最后才用 Pi 默认/当前模型。无效项会告警跳过，重复项只试一次。 |
-| `compactionThinkingLevel` | `string` | `"off"` | 回退压缩模型的思考级别。可选：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。 |
+| `localCompactionModels` | `{modelId, thinkingLevel}[]` | `[]` | 非空时取代上述两项按渠道指定的模型列表，按模型 ID 排序；仅选择 Pi 已注册、渠道名包含原样字符串 `local` 的候选。同一型号有多个合格渠道时按渠道名顺序尝试。未注册或鉴权不可用则跳过，实际压缩失败再试下一项，不额外调用模型做预探测。 |
+| `compactionThinkingLevel` | `string` | `"off"` | 原有按渠道指定的回退模型所用思考级别；`localCompactionModels` 各项独立指定。可选：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。 |
 | `responsesCompactApis` | `string[]` | `["openai-responses", "openai-codex-responses"]` | 启用原生压缩的 Responses API 列表。只能缩小内置集合，不能添加新值。 |
 | `allowCompactionContinuityBreak` | `boolean` | `false` | 当会话最近一次压缩不是本扩展创建的时，是否允许重新开始原生压缩。会在该边界处牺牲不透明窗口的连续性。 |
 | `notifyOnLoad` | `boolean` | `false` | 扩展加载时在 TUI 中显示通知。 |
@@ -85,6 +87,20 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@main
 
 模型条目必须明确指定提供商和型号；不受信中转渠道仍须遵守其目录及内容隔离规则，不能仅因写进回退列表就获得使用许可。
 
+### 示例：按本地渠道中的模型名排序
+
+```json
+{
+  "localCompactionModels": [
+    { "modelId": "gpt-6-sol", "thinkingLevel": "max" },
+    { "modelId": "kimi-k3", "thinkingLevel": "max" },
+    { "modelId": "gpt-6-astra", "thinkingLevel": "high" }
+  ]
+}
+```
+
+支持的 Responses API 仍**先尝试原生压缩**，失败后才依次使用上面三种文本模型；尚无加密 checkpoint 时，最后交给 Pi 默认文本压缩。已有 checkpoint 后首次向不兼容模型请求时，则按同一优先级生成可移植摘要，最后尝试当前模型；全部失败会中止请求，绝不把占位文本当历史。注册与鉴权检查不会额外发送模型预探测请求；真正压缩失败才继续下一候选。**渠道名包含 `local` 不证明实际端点在本地或可信**，仍需自行核查渠道配置；原生压缩与 Pi 默认/当前模型路径不受此候选筛选限制。
+
 ### 示例：强制使用 V1 压缩协议
 
 ```json
@@ -102,11 +118,11 @@ pi 触发压缩时（`session_before_compact`）：
    - **V1**：POST 到 `/responses/compact`，接收不透明的压缩窗口。
    - 成功后，压缩窗口被存储，后续请求通过 `before_provider_request` 钩子回放。
 
-2. **非 Responses API，或尚无加密 checkpoint 时原生压缩失败** → 按顺序调用 `compactionModel`、`additionalCompactionModels` 执行 Pi 文本压缩；成功即停，用户中止则取消，全部失败才由 Pi 默认压缩处理完整上下文。**已有加密 checkpoint 时若再次原生压缩失败**，从会话原始条目重建本次应压缩的完整历史，按配置模型顺序再到当前模型生成可移植摘要；全部失败就取消，不能让 Pi 只总结占位文本。
+2. **非 Responses API，或尚无加密 checkpoint 时原生压缩失败** → `localCompactionModels` 非空时按模型名优先级调用，否则按原有 `compactionModel`、`additionalCompactionModels` 顺序调用 Pi 文本压缩；成功即停，用户中止则取消，全部失败才由 Pi 默认压缩处理完整上下文。**已有加密 checkpoint 时若再次原生压缩失败**，从会话原始条目重建本次应压缩的完整历史，按配置模型顺序再到当前模型生成可移植摘要；全部失败就取消，不能让 Pi 只总结占位文本。
 
 3. **原生压缩之后第一次实际请求不兼容模型** → 按 Pi 的上下文编辑规则重建被隐藏的历史，分块生成文本摘要并存入当前分支；后续复用。切回原模型仍使用原生 checkpoint。混合模型历史按 Pi 的 Responses 序列化规则处理：不向原生模型回放异模型的推理签名，并在压缩和 checkpoint 回放时一致地规范文本/工具 ID；无需真实模型的测试会将本地序列化结果与 Pi 转换器对照。若重建、摘要或原生回放失败，请求会明确中止，保留原会话以便重试。
 
-原生压缩按 API 类型而非提供商判断。V2 流中明确返回 `response.failed` 或 `error` 时不重试；已收到压缩块但未收到完成事件就中断时，不持久化该块，也不自动重发可能已计费的请求。只有输出出现之前的传输中断才可能按有界次数重试，再逐级降级到文本压缩。提供商报告的 V1/V2 原生用量会进入 Pi 压缩统计；按需生成的可移植摘要用量记在扩展的会话条目中，但受 Pi 当前只读扩展接口限制，暂不计入 `/session` 总量。
+有 UI 时，状态栏会显示当前压缩方式和模型；完成后会提示原生 checkpoint、文本/可移植摘要，或 Pi 默认压缩的结果。原生压缩按 API 类型而非提供商判断。V2 流中明确返回 `response.failed` 或 `error` 时不重试；已收到压缩块但未收到完成事件就中断时，不持久化该块，也不自动重发可能已计费的请求。只有输出出现之前的传输中断才可能按有界次数重试，再逐级降级到文本压缩。提供商报告的 V1/V2 原生用量会进入 Pi 压缩统计；按需生成的可移植摘要用量记在扩展的会话条目中，但受 Pi 当前只读扩展接口限制，暂不计入 `/session` 总量。
 
 **会话仍依赖加密 checkpoint 时，不要直接卸载或降级本 fork。** 卸载会连同请求保护一起移除，旧版可能只把占位文本发给模型。应先结束会话、核实可移植摘要能继续使用，或暂时保留该会话所需的锁定版本。
 

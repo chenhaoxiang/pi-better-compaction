@@ -39,6 +39,44 @@ test("lazy portable summary tries Kimi then configured backup, without leaking a
 	expect(calls).toEqual(["codex-local/kimi-k3", "codex-local/gpt-backup"]);
 });
 
+test("local model IDs are tried in priority order with individual thinking levels and no extra probe", async () => {
+	const sol = mkModel("codex-local-8319", "gpt-6-sol");
+	const astra = mkModel("codex-local", "gpt-6-astra");
+	const calls: Array<{ spec: string; level: string }> = [];
+	const ctx = {
+		model: current,
+		thinkingLevel: "off",
+		modelRegistry: {
+			getAll: () => [sol, kimi, astra, mkModel("qoder-cli", "kimi-k3")],
+			find: (provider: string, id: string) => [sol, kimi, astra, current].find((model) => model.provider === provider && model.id === id),
+			getApiKeyAndHeaders: async (model: { id: string }) => ({ ok: model.id !== "gpt-6-sol", apiKey: "synthetic-only" }),
+		},
+	};
+	const result = await summarizePortableHistory({
+		messages: [user("history")] as never,
+		ctx: ctx as never,
+		config: {
+			...DEFAULT_EXTENSION_CONFIG,
+			compactionModel: "codex-local/legacy-ignored",
+			localCompactionModels: [
+				{ modelId: "gpt-6-sol", thinkingLevel: "max" },
+				{ modelId: "kimi-k3", thinkingLevel: "max" },
+				{ modelId: "gpt-6-astra", thinkingLevel: "high" },
+			],
+		},
+		generate: async ({ model, thinkingLevel }) => {
+			calls.push({ spec: `${model.provider}/${model.id}`, level: thinkingLevel });
+			if (model.id === "kimi-k3") throw new Error("synthetic failure");
+			return { text: "Portable history", usage: undefined };
+		},
+	});
+	expect(result).toMatchObject({ ok: true, model: { id: "gpt-6-astra" } });
+	expect(calls).toEqual([
+		{ spec: "codex-local/kimi-k3", level: "max" },
+		{ spec: "codex-local/gpt-6-astra", level: "high" },
+	]);
+});
+
 test("model registry lookup failure skips to the next configured candidate", async () => {
 	const ctx = context();
 	const originalFind = ctx.modelRegistry.find;

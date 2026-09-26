@@ -20,6 +20,12 @@
 - [x] 3.3 Define and test an honest baseline-pinned coverage non-regression policy plus focused new-code checks; add a GitHub CI workflow using only provider-free tests, and verify the current baseline and a deliberately regressed fixture produce the expected pass/fail outcomes.
 - [x] 3.4 Validate OpenSpec, run local CI-equivalent commands, obtain one fresh-context Kimi K3 read-only review of the medium-priority head and gate-policy diff, resolve blockers, then merge and pin-install the new fork main commit; verify config points only to the fork and the previous known-good commit remains a rollback ref.
 
+## 4. Follow-up: local model priority and visible method (2026-09-27)
+
+- [x] 4.1 Pin the native-first and legacy fallback behavior, then test exact model-ID matching under `local`-named registered providers, per-model thinking, missing/auth failure and no extra network probe.
+- [x] 4.2 Use the same ordered candidates for pre-checkpoint text compaction and post-checkpoint portable summaries; report current/confirmed method in UI while preserving the opaque-marker abort boundary.
+- [ ] 4.3 Document configuration and its lexical-filter limitation in both READMEs; run strict OpenSpec validation, provider-free tests, coverage patch gate and independent review before proposing a fork PR. Merge/install only after the applicable gate and explicit authorization.
+
 ### Medium-priority acceptance and handoff (2026-09-26)
 
 - Fork PR [#5](https://github.com/chenhaoxiang/pi-better-compaction/pull/5) merged normally at `1c1781e00656008846029ffed78109a3e35cf005`; both fresh-context Kimi K3 reviews were bound to their candidate heads, and the final `9957364f887f7862f130e4f42a608a3ac4fd6150` review is recorded in the PR comment. The reviewer found no P0/P1 blockers; theoretical quoted-path and out-of-`src/` added-line coverage limits remain P2 notes.

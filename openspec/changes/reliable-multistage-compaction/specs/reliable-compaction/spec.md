@@ -77,6 +77,25 @@ The extension SHALL include provider-reported native-compaction usage in the Pi 
 - **WHEN** a native response lacks valid usage
 - **THEN** no fabricated token or cost numbers are reported as actual usage.
 
+### Requirement: Local model-ID priorities and visible compaction method
+A nonempty `localCompactionModels` list SHALL replace the explicit-provider text fallback list without changing native-first behavior. Each entry SHALL match its exact model ID only among models currently registered in Pi whose provider name contains `local`, using its own thinking level; eligible providers for the same model ID SHALL be tried in stable provider-name order before the next model ID. The extension SHALL skip missing models and failed authentication without making a separate model-probe request, and advance on non-abort compaction failure. The provider-name check is not proof of a local or trusted endpoint. A missing/failed candidate SHALL NOT introduce an unlisted external text-fallback provider. Normal compaction before an opaque checkpoint ends with Pi's default text compaction; post-checkpoint portable recovery ends with the active model and aborts on total failure.
+
+#### Scenario: Native success with local priority configured
+- **WHEN** a supported Responses native compaction succeeds
+- **THEN** no local text candidate runs and the native checkpoint is retained.
+
+#### Scenario: Models are missing, unauthenticated, or fail
+- **WHEN** native compaction fails and the first exact-ID candidate is unauthenticated, the next is not registered under a `local`-named provider, and a later candidate succeeds
+- **THEN** only registered, authenticated candidates receive real compaction requests in model-ID order at their declared thinking levels, with no separate network probe; success stops the chain.
+
+#### Scenario: No candidate safely summarizes an opaque checkpoint
+- **WHEN** an already opaque-compacted session needs portable history and all configured candidates plus the active model fail
+- **THEN** the request is aborted before its placeholder reaches the provider.
+
+#### Scenario: Visible method without false completion
+- **WHEN** an interactive or RPC UI is available during native, text, or portable compaction
+- **THEN** its status shows the attempted method and model and a successful path identifies the method; Pi-default completion is reported only after Pi emits its success event. Non-UI modes continue without display errors.
+
 ### Requirement: Retriable transport failures only
 Native compact retries SHALL be limited to failures for which replaying the request is safe and useful. Explicit terminal provider failures and user aborts SHALL not be retried as stream-parse errors.
 
