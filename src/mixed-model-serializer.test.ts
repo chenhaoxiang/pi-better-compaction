@@ -131,6 +131,7 @@ test("a system patch between a tool call and its result cannot synthesize a dupl
 	const messages = [kimi, { role: "system", content: "Synthetic patch", timestamp: 3 }, result];
 	const actual = serializeMessagesToResponsesInput(target as never, messages as never);
 	expect(actual.filter((item) => item.type === "function_call_output")).toHaveLength(1);
+	expect(actual).toEqual(piInput(messages));
 });
 
 test("non-vision cross-model history keeps Pi's image-omission placeholders", () => {
@@ -142,4 +143,37 @@ test("non-vision cross-model history keeps Pi's image-omission placeholders", ()
 			content: [{ type: "image", mimeType: "image/png", data: "synthetic" }], timestamp: 2 },
 	];
 	expect(serializeMessagesToResponsesInput(target as never, messages as never)).toEqual(piInput(messages));
+});
+
+test("empty user and foreign assistant output do not advance Pi's fallback text ID", () => {
+	const onlyRedacted = { ...kimi, content: [
+		{ type: "thinking", thinking: "", redacted: true, thinkingSignature: "synthetic" },
+	] };
+	const messages = [user("Start"), { role: "user", content: [], timestamp: 2 },
+		onlyRedacted, { ...kimi, content: [{ type: "text", text: "Continuing" }] }];
+	expect(serializeMessagesToResponsesInput(target as never, messages as never)).toEqual(piInput(messages));
+});
+
+test("legacy null user content is normalized before mixed-model fallback IDs", () => {
+	const messages = [{ role: "user", content: null, timestamp: 1 },
+		{ ...kimi, content: [{ type: "text", text: "Continuing" }] }];
+	expect(serializeMessagesToResponsesInput(target as never, messages as never)).toEqual(piInput(messages));
+});
+
+test("new tool-call batches reset prior result IDs just like Pi", () => {
+	const orphan = { ...result, toolCallId: "call_kimi|fc_kimi" };
+	const messages = [orphan, { ...kimi, provider: target.provider, model: target.id, content: [
+		{ type: "toolCall", id: "call_kimi|fc_kimi", name: "read", arguments: { path: "synthetic" } },
+	] }];
+	expect(serializeMessagesToResponsesInput(target as never, messages as never)).toEqual(piInput(messages));
+});
+
+test("vision models pass through mixed-model images exactly as Pi does", () => {
+	const vision = { ...target, input: ["text", "image"] };
+	const messages = [{ role: "user", content: [
+		{ type: "text", text: "Question" }, { type: "image", mimeType: "image/png", data: "synthetic" },
+	], timestamp: 1 }];
+	const expected = convertResponsesMessages(vision as never,
+		{ messages: convertToLlm(messages as never) } as never, toolCallProviders, { includeSystemPrompt: false });
+	expect(serializeMessagesToResponsesInput(vision as never, messages as never)).toEqual(expected);
 });

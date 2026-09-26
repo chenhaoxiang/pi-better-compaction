@@ -180,8 +180,8 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 			const item = serializeUserMessage(message, model);
 			if (item) {
 				input.push(item);
+				messageIndex++;
 			}
-			messageIndex++;
 			continue;
 		}
 
@@ -189,8 +189,8 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 			const items = serializeAssistantMessage(message, messageIndex, model);
 			if (items.length > 0) {
 				input.push(...items);
+				messageIndex++;
 			}
-			messageIndex++;
 			continue;
 		}
 
@@ -290,7 +290,10 @@ function replaceUnsupportedImages(content: Array<TextContent | ImageContent>, pl
 
 function transformMessagesForResponses<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
 	const toolCallIdMap = new Map<string, string>();
-	const imageAwareMessages = model.input.includes("image") ? messages : messages.map((message): Message => {
+	const normalizedMessages = messages.map((message): Message =>
+		message.content == null ? { ...message, content: [] } : message,
+	);
+	const imageAwareMessages = model.input.includes("image") ? normalizedMessages : normalizedMessages.map((message): Message => {
 		if (message.role === "user" && Array.isArray(message.content)) {
 			return { ...message, content: replaceUnsupportedImages(message.content, "(image omitted: model does not support images)") };
 		}
@@ -346,7 +349,10 @@ function transformMessagesForResponses<TApi extends Api>(messages: Message[], mo
 			if (message.stopReason === "error" || message.stopReason === "aborted") continue;
 			transformed.push(message);
 			const toolCalls = message.content.filter(isToolCallBlock);
-			if (toolCalls.length > 0) pendingToolCalls = toolCalls;
+			if (toolCalls.length > 0) {
+				pendingToolCalls = toolCalls;
+				existingToolResultIds = new Set<string>();
+			}
 		} else if (message.role === "toolResult") {
 			existingToolResultIds.add(message.toolCallId);
 			transformed.push(message);
