@@ -1433,6 +1433,22 @@ test("native success does not call any configured text fallback model", async ()
 	expect(fallbackCalls).toHaveLength(0);
 });
 
+test("native success does not call local-priority text candidates", async () => {
+	const user = createUserEntry("native-local-user", "Preserve the native checkpoint.");
+	const h = await loadHookHarness({
+		config: { localCompactionModels: [{ modelId: "gpt-6-sol", thinkingLevel: "max" }] },
+		v2CompactResult: { ok: true, compactionItem: { type: "compaction", encrypted_content: "opaque" } },
+	});
+	const ctx = createContext({ sessionContextMessages: [toReplayMessage(user)], registryModels: [{ provider: "codex-local", id: "gpt-6-sol" }] });
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	const result = await h.sessionBeforeCompact(event, ctx) as { compaction: { details: { strategy: string } } };
+	expect(result.compaction.details.strategy).toBe("openai-native-compact-v2");
+	expect(h.fallbackCalls).toHaveLength(0);
+});
+
 test("native failure tries configured text models in order and stops at the first success", async () => {
 	const user = createUserEntry("ordered-user", "Summarize this history.");
 	const portable = { summary: "## Goal\nContinue this task.", firstKeptEntryId: user.id, tokensBefore: 512 };
@@ -1472,11 +1488,11 @@ test("default fallback is announced only after Pi confirms successful compaction
 		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
 	};
 	expect(await h.sessionBeforeCompact(event, ctx)).toBeUndefined();
-	expect(statuses.at(-1)).toContain("Pi 默认文本压缩");
-	expect(notices.some((notice) => notice.includes("默认文本压缩完成"))).toBe(false);
+	expect(statuses.at(-1)).toContain("Pi default text compaction");
+	expect(notices.some((notice) => notice.includes("default text compaction completed"))).toBe(false);
 	await h.sessionCompact({ fromExtension: false, compactionEntry: {} }, ctx);
 	expect(statuses.at(-1)).toBeUndefined();
-	expect(notices.some((notice) => notice.includes("Pi 默认文本压缩完成"))).toBe(true);
+	expect(notices.some((notice) => notice.includes("Pi default text compaction completed"))).toBe(true);
 });
 
 test("failed Pi-default compaction clears the transient method without reporting success", async () => {
@@ -1494,7 +1510,28 @@ test("failed Pi-default compaction clears the transient method without reporting
 	expect(await h.sessionBeforeCompact(event, ctx)).toBeUndefined();
 	await h.sessionCompactFailed({ reason: "manual", aborted: false, fromExtension: false }, ctx);
 	expect(statuses.at(-1)).toBeUndefined();
-	expect(notices.some((notice) => notice.includes("默认文本压缩完成"))).toBe(false);
+	expect(notices.some((notice) => notice.includes("default text compaction completed"))).toBe(false);
+});
+
+test("registry failure reports its own cause instead of mislabeling every model as unregistered", async () => {
+	const user = createUserEntry("registry-error-user", "Preserve history.");
+	const h = await loadHookHarness({
+		config: { localCompactionModels: [{ modelId: "gpt-6-sol", thinkingLevel: "max" }] },
+		v2CompactResult: { ok: false, reason: "non-2xx" },
+	});
+	const notices: string[] = [];
+	const ctx = createContext({ sessionContextMessages: [toReplayMessage(user)] }) as any;
+	ctx.modelRegistry.getAll = () => { throw new Error("synthetic registry failure"); };
+	ctx.hasUI = true;
+	ctx.ui = { notify: (message: string) => notices.push(message) };
+	const event = {
+		signal: new AbortController().signal,
+		preparation: { tokensBefore: 512, firstKeptEntryId: user.id, messagesToSummarize: [toReplayMessage(user)], turnPrefixMessages: [] },
+	};
+	expect(await h.sessionBeforeCompact(event, ctx)).toBeUndefined();
+	expect(h.fallbackCalls).toHaveLength(0);
+	expect(notices.join(" ")).toContain("local model registry unavailable");
+	expect(notices.join(" ")).not.toContain("not-registered-local");
 });
 
 test("local-name model priority skips unavailable candidates, uses per-model thinking, and reports the method", async () => {
@@ -1541,7 +1578,7 @@ test("local-name model priority skips unavailable candidates, uses per-model thi
 		{ model: "codex-local/gpt-6-sol", thinking: "max", allowCurrent: true },
 		{ model: "codex-local/gpt-6-astra", thinking: "high", allowCurrent: true },
 	]);
-	expect(statuses.some((status) => status?.includes("原生"))).toBe(true);
+	expect(statuses.some((status) => status?.includes("native"))).toBe(true);
 	expect(statuses.some((status) => status?.includes("gpt-6-astra"))).toBe(true);
 	expect(notices.some((notice) => notice.includes("gpt-6-astra"))).toBe(true);
 	await h.sessionCompact({ fromExtension: true, compactionEntry: { details: {} } }, ctx);

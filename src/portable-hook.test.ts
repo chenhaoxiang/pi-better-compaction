@@ -89,9 +89,9 @@ test("first incompatible request generates and caches portable text, but switchi
 	expect(h.generated[0].join(" ")).toContain("Hidden decision A");
 	expect(h.generated[0].join(" ")).not.toContain("Kept fact");
 	expect(h.entries.at(-1).type).toBe("custom");
-	expect(h.statuses.some((text) => text?.includes("跨模型可移植摘要 codex-local/kimi-k3"))).toBe(true);
+	expect(h.statuses.some((text) => text?.includes("cross-model portable summary codex-local/kimi-k3"))).toBe(true);
 	expect(h.statuses.at(-1)).toBeUndefined();
-	expect(h.notices.some((text) => text.includes("跨模型可移植摘要"))).toBe(true);
+	expect(h.notices.some((text) => text.includes("cross-model portable summary"))).toBe(true);
 
 	const resumed = harness({ initialEntries: h.entries });
 	const resumedResult = await resumed.handlers.get("context")!({ messages: originalMessages }, resumed.makeCtx());

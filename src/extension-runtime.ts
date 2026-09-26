@@ -107,7 +107,7 @@ function notifyWarning(ctx: ExtensionContext, message: string): void {
 
 function setCompactionStatus(ctx: ExtensionContext, method?: string): void {
 	if (!ctx.hasUI) return;
-	try { ctx.ui.setStatus?.(EXTENSION_ID, method ? `压缩中：${method}` : undefined); }
+	try { ctx.ui.setStatus?.(EXTENSION_ID, method ? `Compacting: ${method}` : undefined); }
 	catch { /* UI must not affect compaction. */ }
 }
 
@@ -501,7 +501,7 @@ async function handleSessionBeforeCompact(
 		responsesCompactApis: config.responsesCompactApis,
 	});
 	if (resolution.ok) {
-		setCompactionStatus(ctx, `Responses 原生 ${config.compactionVersion.toUpperCase()} (${resolution.runtime.provider}/${resolution.runtime.model})`);
+		setCompactionStatus(ctx, `Responses native ${config.compactionVersion.toUpperCase()} (${resolution.runtime.provider}/${resolution.runtime.model})`);
 		let responsesOutcome: ResponsesCompactOutcome;
 
 		if (config.compactionVersion === "v2") {
@@ -511,7 +511,7 @@ async function handleSessionBeforeCompact(
 		}
 
 		if (responsesOutcome.outcome === "success") {
-			notifyCompactionMethod(ctx, `Responses 原生 ${config.compactionVersion.toUpperCase()} checkpoint (${resolution.runtime.provider}/${resolution.runtime.model})`);
+			notifyCompactionMethod(ctx, `Responses native ${config.compactionVersion.toUpperCase()} checkpoint (${resolution.runtime.provider}/${resolution.runtime.model})`);
 			return { compaction: responsesOutcome.compaction };
 		}
 		if (responsesOutcome.outcome === "aborted") {
@@ -553,10 +553,10 @@ async function handleSessionBeforeCompact(
 			const portable = await dependencies.summarizePortableHistory({
 				messages: source.messages, ctx, config, signal: event.signal,
 				customInstructions: event.customInstructions, sessionId: getSessionId(ctx),
-				onCandidate: (candidate) => setCompactionStatus(ctx, `历史恢复文本摘要 ${candidate.spec} (${candidate.thinkingLevel})`),
+				onCandidate: (candidate) => setCompactionStatus(ctx, `portable history summary ${candidate.spec} (${candidate.thinkingLevel})`),
 			});
 			if (!portable.ok) return cancelOpaqueCompaction(ctx, config, portable.reason);
-			notifyCompactionMethod(ctx, `历史恢复文本摘要 (${portable.model.provider}/${portable.model.id})`);
+			notifyCompactionMethod(ctx, `portable history summary (${portable.model.provider}/${portable.model.id})`);
 			return { compaction: {
 				summary: portable.summary,
 				firstKeptEntryId: event.preparation.firstKeptEntryId,
@@ -572,13 +572,14 @@ async function handleSessionBeforeCompact(
 
 	// Branch 2: try configured text models in order, without silently switching
 	// channels beyond the explicit list. A repeated spec is attempted only once.
-	const { candidates, missing } = getTextCompactionCandidates(config, ctx.modelRegistry);
-	const failures: string[] = missing.map((modelId) => `${modelId} (not-registered-local)`);
+	const { candidates, missing, registryUnavailable } = getTextCompactionCandidates(config, ctx.modelRegistry);
+	const failures: string[] = registryUnavailable ? ["local model registry unavailable"]
+		: missing.map((modelId) => `${modelId} (not-registered-local)`);
 	// Preserve the previous no-model probe for a legacy config with no alternates.
 	const attempts = candidates.length === 0 && config.localCompactionModels.length === 0
 		? [{ spec: undefined, thinkingLevel: config.compactionThinkingLevel }] : candidates;
 	for (const { spec: modelSpec, thinkingLevel } of attempts) {
-		if (modelSpec) setCompactionStatus(ctx, `文本摘要 ${modelSpec} (${thinkingLevel})`);
+		if (modelSpec) setCompactionStatus(ctx, `text summary ${modelSpec} (${thinkingLevel})`);
 		const fallback = await dependencies.runNativeFallbackCompaction({
 			ctx,
 			event,
@@ -588,7 +589,7 @@ async function handleSessionBeforeCompact(
 			sessionId: getSessionId(ctx),
 		});
 		if (fallback.ok) {
-			notifyCompactionMethod(ctx, `文本摘要 (${fallback.model.provider}/${fallback.model.id}, ${thinkingLevel})`);
+			notifyCompactionMethod(ctx, `text summary (${fallback.model.provider}/${fallback.model.id}, ${thinkingLevel})`);
 			writeDebugArtifact("compaction-event", {
 				event: "session_before_compact.fallback-success",
 				model: fallback.model,
@@ -612,7 +613,7 @@ async function handleSessionBeforeCompact(
 	if (failures.length > 0) {
 		notifyWarning(ctx, `compaction models unavailable: ${failures.join(", ")}; using Pi's default compaction`);
 	}
-	setCompactionStatus(ctx, "Pi 默认文本压缩");
+	setCompactionStatus(ctx, "Pi default text compaction");
 	// Branch 3: Pi's default compaction still has the full pre-compaction context.
 	return undefined;
 }
@@ -719,7 +720,7 @@ async function handlePortableContext(
 					config,
 					signal: ctx.signal,
 					sessionId: getSessionId(ctx),
-					onCandidate: (candidate) => setCompactionStatus(ctx, `跨模型可移植摘要 ${candidate.spec} (${candidate.thinkingLevel})`),
+					onCandidate: (candidate) => setCompactionStatus(ctx, `cross-model portable summary ${candidate.spec} (${candidate.thinkingLevel})`),
 				});
 			} finally { setCompactionStatus(ctx); }
 			if (!result.ok) {
@@ -741,7 +742,7 @@ async function handlePortableContext(
 				usageRecords: result.usageRecords,
 				createdAt: new Date().toISOString(),
 			});
-			notifyCompactionMethod(ctx, `跨模型可移植摘要 (${result.model.provider}/${result.model.id})`);
+			notifyCompactionMethod(ctx, `cross-model portable summary (${result.model.provider}/${result.model.id})`);
 		}
 		return { messages: event.messages.map((message) =>
 			message.role === "compactionSummary" && message.summary === NATIVE_COMPACTION_FALLBACK_SUMMARY
@@ -988,7 +989,7 @@ export function registerExtensionRuntime(
 	pi.on("session_compact", (event, ctx) => {
 		setCompactionStatus(ctx);
 		const { config } = dependencies.loadExtensionConfig();
-		if (config.enabled && !event.fromExtension) notifyCompactionMethod(ctx, "Pi 默认文本压缩完成");
+		if (config.enabled && !event.fromExtension) notifyCompactionMethod(ctx, "Pi default text compaction completed");
 	});
 
 	pi.on("session_compact_failed", (event, ctx) => {

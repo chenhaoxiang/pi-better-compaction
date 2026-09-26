@@ -31,12 +31,12 @@ export function resolveLocalCompactionModels(
 export function getTextCompactionCandidates(
 	config: ExtensionConfig,
 	registry: Pick<ExtensionContext["modelRegistry"], "getAll">,
-): { candidates: TextCompactionCandidate[]; missing: string[] } {
+): { candidates: TextCompactionCandidate[]; missing: string[]; registryUnavailable?: boolean } {
 	if (config.localCompactionModels.length > 0) {
 		try {
 			return resolveLocalCompactionModels(config.localCompactionModels, registry.getAll());
 		} catch {
-			return { candidates: [], missing: config.localCompactionModels.map((model) => model.modelId) };
+			return { candidates: [], missing: [], registryUnavailable: true };
 		}
 	}
 	const candidates: TextCompactionCandidate[] = [];

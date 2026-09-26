@@ -65,7 +65,7 @@ describe("user-authored local model priorities", () => {
 			{ ...DEFAULT_EXTENSION_CONFIG, localCompactionModels: preferences },
 			{ getAll: () => { throw new Error("synthetic registry error"); } },
 		);
-		expect(result).toEqual({ candidates: [], missing: ["gpt-6-sol", "kimi-k3", "gpt-6-astra"] });
+		expect(result).toEqual({ candidates: [], missing: [], registryUnavailable: true });
 	});
 
 	test("invalid local-priority container warns and preserves the safe empty default", () => {
