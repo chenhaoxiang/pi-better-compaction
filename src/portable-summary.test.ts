@@ -111,12 +111,14 @@ test("manual compaction guidance reaches the portable summarizer", async () => {
 
 test("long source is summarized in ordered chunks with the preceding summary, not silently truncated", async () => {
 	const seen: Array<{ text: string; prior?: string }> = [];
+	const progress: string[] = [];
 	const source = [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb"), user("fact-C-cccccccccc")];
 	const result = await summarizePortableHistory({
 		messages: source as never,
 		ctx: context() as never,
 		config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" },
 		maxChunkBytes: 40,
+		onProgress: ({ chunkIndex, chunkCount, phase }) => progress.push(`${chunkIndex}/${chunkCount}:${phase}`),
 		generate: async ({ messages, previousSummary }) => {
 			seen.push({ text: JSON.stringify(messages), prior: previousSummary });
 			return { text: `summary-${seen.length}`, usage: undefined };
@@ -124,6 +126,11 @@ test("long source is summarized in ordered chunks with the preceding summary, no
 	});
 	expect(result).toMatchObject({ ok: true, summary: "summary-3" });
 	expect(seen.map((call) => call.prior)).toEqual([undefined, "summary-1", "summary-2"]);
+	expect(progress).toEqual([
+		"1/3:start", "1/3:complete",
+		"2/3:start", "2/3:complete",
+		"3/3:start", "3/3:complete",
+	]);
 	for (const fact of ["fact-A", "fact-B", "fact-C"]) {
 		expect(seen.some((call) => call.text.includes(fact))).toBe(true);
 	}

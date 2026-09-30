@@ -15,7 +15,7 @@ import { redactValue, writeDebugArtifact } from "./debug";
 import { findLatestCompactionEntry, isPersistedNativeCompactionEntry, resolveLatestNativeCompactionEntry } from "./details-store";
 import { runNativeFallbackCompaction } from "./native-fallback";
 import { reconstructPendingPortableHistory, reconstructPortableHistory } from "./portable-history";
-import { summarizePortableHistory } from "./portable-summary";
+import { summarizePortableHistory, type PortableSummaryProgress } from "./portable-summary";
 import {
 	rewriteResponsesPayloadWithNativeReplay,
 	serializeLiveTailToResponsesInput,
@@ -115,6 +115,11 @@ function notifyCompactionMethod(ctx: ExtensionContext, method: string): void {
 	if (!ctx.hasUI) return;
 	try { ctx.ui.notify(`${EXTENSION_ID}: ${method}`, "info"); }
 	catch { /* UI must not affect compaction. */ }
+}
+
+function formatPortableSummaryProgress(prefix: string, progress: PortableSummaryProgress): string {
+	const suffix = progress.phase === "complete" ? " done" : progress.phase === "failed" ? " failed" : "";
+	return `${prefix} ${progress.candidate.spec} (${progress.candidate.thinkingLevel}) · chunk ${progress.chunkIndex}/${progress.chunkCount}${suffix}`;
 }
 
 function cancelOpaqueCompaction(ctx: ExtensionContext, config: ExtensionConfig, reason: string): { cancel: true } {
@@ -554,6 +559,7 @@ async function handleSessionBeforeCompact(
 				messages: source.messages, ctx, config, signal: event.signal,
 				customInstructions: event.customInstructions, sessionId: getSessionId(ctx),
 				onCandidate: (candidate) => setCompactionStatus(ctx, `portable history summary ${candidate.spec} (${candidate.thinkingLevel})`),
+				onProgress: (progress) => setCompactionStatus(ctx, formatPortableSummaryProgress("portable history summary", progress)),
 			});
 			if (!portable.ok) return cancelOpaqueCompaction(ctx, config, portable.reason);
 			notifyCompactionMethod(ctx, `portable history summary (${portable.model.provider}/${portable.model.id})`);
@@ -721,6 +727,7 @@ async function handlePortableContext(
 					signal: ctx.signal,
 					sessionId: getSessionId(ctx),
 					onCandidate: (candidate) => setCompactionStatus(ctx, `cross-model portable summary ${candidate.spec} (${candidate.thinkingLevel})`),
+					onProgress: (progress) => setCompactionStatus(ctx, formatPortableSummaryProgress("cross-model portable summary", progress)),
 				});
 			} finally { setCompactionStatus(ctx); }
 			if (!result.ok) {
