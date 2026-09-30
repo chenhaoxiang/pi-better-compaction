@@ -50,9 +50,12 @@ function harness(opts: { fail?: boolean; failWithUsage?: boolean; initialEntries
 		executeNativeCompaction: async () => ({ ok: false, reason: "non-2xx" }) as never,
 		executeV2Compaction: async () => ({ ok: false, reason: "non-2xx" }) as never,
 		runNativeFallbackCompaction: async () => ({ ok: false, reason: "no-model-configured" }) as never,
-		summarizePortableHistory: async ({ messages, onCandidate }: { messages: Array<{ content?: unknown }>; onCandidate?: (candidate: { spec: string; thinkingLevel: string }) => void }) => {
+		summarizePortableHistory: async ({ messages, onCandidate, onProgress }: { messages: Array<{ content?: unknown }>; onCandidate?: (candidate: { spec: string; thinkingLevel: string }) => void; onProgress?: (progress: { candidate: { spec: string; thinkingLevel: string }; chunkIndex: number; chunkCount: number; phase: "start" | "complete" | "failed" }) => void }) => {
 			generated.push(messages.map((message) => JSON.stringify(message)));
-			onCandidate?.({ spec: "codex-local/kimi-k3", thinkingLevel: "max" });
+			const candidate = { spec: "codex-local/kimi-k3", thinkingLevel: "max" } as const;
+			onCandidate?.(candidate);
+			onProgress?.({ candidate, chunkIndex: 1, chunkCount: 3, phase: "start" });
+			onProgress?.({ candidate, chunkIndex: 1, chunkCount: 3, phase: "complete" });
 			return opts.fail || opts.failWithUsage
 				? { ok: false, reason: "all-models-failed", usageRecords: opts.failWithUsage ? [{ provider: "codex-local", model: "kimi-k3", usage: { input: 10, output: 2, totalTokens: 12, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }] : [] }
 				: { ok: true, summary: "## Goal\nPortable decision A", model: { provider: "codex-local", id: "kimi-k3" }, usageRecords: [] };
@@ -90,6 +93,7 @@ test("first incompatible request generates and caches portable text, but switchi
 	expect(h.generated[0].join(" ")).not.toContain("Kept fact");
 	expect(h.entries.at(-1).type).toBe("custom");
 	expect(h.statuses.some((text) => text?.includes("cross-model portable summary codex-local/kimi-k3"))).toBe(true);
+	expect(h.statuses.some((text) => text?.includes("chunk 1/3"))).toBe(true);
 	expect(h.statuses.at(-1)).toBeUndefined();
 	expect(h.notices.some((text) => text.includes("cross-model portable summary"))).toBe(true);
 
