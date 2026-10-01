@@ -136,6 +136,47 @@ test("long source is summarized in ordered chunks with the preceding summary, no
 	}
 });
 
+test("reports a failed progress event when a chunk returns empty text", async () => {
+	const progress: string[] = [];
+	const result = await summarizePortableHistory({
+		messages: [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb")] as never,
+		ctx: { ...context(), model: undefined } as never,
+		config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" },
+		maxChunkBytes: 40,
+		onProgress: ({ chunkIndex, chunkCount, phase }) => progress.push(`${chunkIndex}/${chunkCount}:${phase}`),
+		generate: async ({ previousSummary }) => ({ text: previousSummary ? "" : "summary-1", usage: undefined }),
+	});
+	expect(result).toMatchObject({ ok: false, reason: "all-models-failed" });
+	expect(progress).toEqual([
+		"1/2:start", "1/2:complete",
+		"2/2:start", "2/2:failed",
+	]);
+});
+
+test("reports a failed progress event when the accumulated summary exceeds the safe input budget", async () => {
+	const progress: string[] = [];
+	const result = await summarizePortableHistory({
+		messages: [user("a".repeat(600)), user("b".repeat(600))] as never,
+		ctx: {
+			...context(),
+			model: undefined,
+			modelRegistry: {
+				...context().modelRegistry,
+				find: (provider: string, id: string) => mkModel(provider, id, 8192),
+			},
+		} as never,
+		config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" },
+		maxChunkBytes: 1024,
+		onProgress: ({ chunkIndex, chunkCount, phase }) => progress.push(`${chunkIndex}/${chunkCount}:${phase}`),
+		generate: async () => ({ text: "s".repeat(1800), usage: undefined }),
+	});
+	expect(result).toMatchObject({ ok: false, reason: "all-models-failed" });
+	expect(progress).toEqual([
+		"1/2:start", "1/2:complete",
+		"2/2:failed",
+	]);
+});
+
 test("all candidates failing returns an explicit failure without a placeholder or partial success", async () => {
 	const calls: string[] = [];
 	const result = await summarizePortableHistory({
