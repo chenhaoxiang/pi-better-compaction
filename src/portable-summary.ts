@@ -18,6 +18,12 @@ type GenerateInput = {
 };
 export type PortableSummaryGenerator = (input: GenerateInput) => Promise<{ text: string; usage?: Usage }>;
 export type PortableUsageRecord = { provider: string; model: string; usage: Usage };
+export type PortableSummaryProgress = {
+	candidate: TextCompactionCandidate;
+	chunkIndex: number;
+	chunkCount: number;
+	phase: "start" | "complete" | "failed";
+};
 export type PortableSummaryResult =
 	| { ok: true; summary: string; model: { provider: string; id: string }; usageRecords: PortableUsageRecord[] }
 	| { ok: false; reason: "aborted" | "all-models-failed"; usageRecords: PortableUsageRecord[] };
@@ -78,6 +84,7 @@ export async function summarizePortableHistory(args: {
 	customInstructions?: string;
 	generate?: PortableSummaryGenerator;
 	onCandidate?: (candidate: TextCompactionCandidate) => void;
+	onProgress?: (progress: PortableSummaryProgress) => void;
 }): Promise<PortableSummaryResult> {
 	const { messages, ctx, config, signal } = args;
 	const usageRecords: PortableUsageRecord[] = [];
@@ -124,12 +131,22 @@ export async function summarizePortableHistory(args: {
 		try { args.onCandidate?.(candidate); } catch { /* UI feedback must not decide summarization. */ }
 		let summary: string | undefined;
 		let failed = false;
-		for (const chunk of chunks) {
+		for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+			const chunk = chunks[chunkIndex];
+			const progress = (phase: PortableSummaryProgress["phase"]) => {
+				try {
+					args.onProgress?.({ candidate, chunkIndex: chunkIndex + 1, chunkCount: chunks.length, phase });
+				} catch { /* UI feedback must not decide summarization. */ }
+			};
+
 			if (signal?.aborted) return { ok: false, reason: "aborted", usageRecords };
 			if (Buffer.byteLength(summary ?? "", "utf8") + serializedBytes(chunk) > safeInputBytes) {
+				progress("failed");
 				failed = true;
 				break;
 			}
+
+			progress("start");
 			try {
 				const response = await generate({
 					messages: chunk,
@@ -144,11 +161,17 @@ export async function summarizePortableHistory(args: {
 					sessionId: args.sessionId,
 					reserveTokens,
 				});
-				if (!response.text.trim()) { failed = true; break; }
+				if (!response.text.trim()) {
+					progress("failed");
+					failed = true;
+					break;
+				}
 				summary = response.text.trim();
 				if (response.usage) usageRecords.push({ provider: model.provider, model: model.id, usage: response.usage });
+				progress("complete");
 			} catch {
 				if (signal?.aborted) return { ok: false, reason: "aborted", usageRecords };
+				progress("failed");
 				failed = true;
 				break;
 			}

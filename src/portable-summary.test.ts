@@ -111,12 +111,14 @@ test("manual compaction guidance reaches the portable summarizer", async () => {
 
 test("long source is summarized in ordered chunks with the preceding summary, not silently truncated", async () => {
 	const seen: Array<{ text: string; prior?: string }> = [];
+	const progress: string[] = [];
 	const source = [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb"), user("fact-C-cccccccccc")];
 	const result = await summarizePortableHistory({
 		messages: source as never,
 		ctx: context() as never,
 		config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" },
 		maxChunkBytes: 40,
+		onProgress: ({ chunkIndex, chunkCount, phase }) => progress.push(`${chunkIndex}/${chunkCount}:${phase}`),
 		generate: async ({ messages, previousSummary }) => {
 			seen.push({ text: JSON.stringify(messages), prior: previousSummary });
 			return { text: `summary-${seen.length}`, usage: undefined };
@@ -124,9 +126,55 @@ test("long source is summarized in ordered chunks with the preceding summary, no
 	});
 	expect(result).toMatchObject({ ok: true, summary: "summary-3" });
 	expect(seen.map((call) => call.prior)).toEqual([undefined, "summary-1", "summary-2"]);
+	expect(progress).toEqual([
+		"1/3:start", "1/3:complete",
+		"2/3:start", "2/3:complete",
+		"3/3:start", "3/3:complete",
+	]);
 	for (const fact of ["fact-A", "fact-B", "fact-C"]) {
 		expect(seen.some((call) => call.text.includes(fact))).toBe(true);
 	}
+});
+
+test("reports a failed progress event when a chunk returns empty text", async () => {
+	const progress: string[] = [];
+	const result = await summarizePortableHistory({
+		messages: [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb")] as never,
+		ctx: { ...context(), model: undefined } as never,
+		config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" },
+		maxChunkBytes: 40,
+		onProgress: ({ chunkIndex, chunkCount, phase }) => progress.push(`${chunkIndex}/${chunkCount}:${phase}`),
+		generate: async ({ previousSummary }) => ({ text: previousSummary ? "" : "summary-1", usage: undefined }),
+	});
+	expect(result).toMatchObject({ ok: false, reason: "all-models-failed" });
+	expect(progress).toEqual([
+		"1/2:start", "1/2:complete",
+		"2/2:start", "2/2:failed",
+	]);
+});
+
+test("reports a failed progress event when the accumulated summary exceeds the safe input budget", async () => {
+	const progress: string[] = [];
+	const result = await summarizePortableHistory({
+		messages: [user("a".repeat(600)), user("b".repeat(600))] as never,
+		ctx: {
+			...context(),
+			model: undefined,
+			modelRegistry: {
+				...context().modelRegistry,
+				find: (provider: string, id: string) => mkModel(provider, id, 8192),
+			},
+		} as never,
+		config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" },
+		maxChunkBytes: 1024,
+		onProgress: ({ chunkIndex, chunkCount, phase }) => progress.push(`${chunkIndex}/${chunkCount}:${phase}`),
+		generate: async () => ({ text: "s".repeat(1800), usage: undefined }),
+	});
+	expect(result).toMatchObject({ ok: false, reason: "all-models-failed" });
+	expect(progress).toEqual([
+		"1/2:start", "1/2:complete",
+		"2/2:failed",
+	]);
 });
 
 test("all candidates failing returns an explicit failure without a placeholder or partial success", async () => {
