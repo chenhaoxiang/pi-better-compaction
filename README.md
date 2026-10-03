@@ -2,38 +2,60 @@
 
 English | [中文](README.zh-CN.md)
 
-A [pi](https://github.com/earendil-works/pi) extension that prioritizes provider-native context compaction and preserves safe cross-model continuation:
+A maintained fork of [`pi-better-compaction`](https://github.com/lll9p/pi-better-compaction) for Pi. It keeps provider-native compaction when possible and adds a safe, observable path for continuing a session after the active model changes.
 
-1. **OpenAI Responses APIs**, including supported GitHub Copilot models, use the provider's native compaction endpoint. The opaque checkpoint is the preferred same-model context.
-2. On native failure, configured text models run in order; Pi's default compaction is the final pre-checkpoint fallback.
-3. Only when an incompatible model actually makes a request after native compaction, the extension prepares and persists a portable summary from the active raw session branch. Merely switching models does not call a summarizer.
+> Fork repository: <https://github.com/chenhaoxiang/pi-better-compaction>
+>
+> This README describes the fork on `main`. The upstream npm package and the fork are separate release lines.
 
-Failures *before* native compaction fall back. Once an opaque checkpoint exists, a request that cannot replay it or safely generate a portable summary is **aborted**, never silently sent with a placeholder history.
+## What this fork does
 
-## Install
+The extension uses a native-first compaction strategy:
+
+1. **Responses APIs** use the provider's native compaction endpoint. The opaque checkpoint is the preferred context for the same model.
+2. **Before an opaque checkpoint exists**, configured text models are attempted in order; Pi's default compaction remains the final fallback.
+3. **After a native checkpoint**, the fork waits until an incompatible model actually makes a request before generating a portable summary. Merely switching models does not spend a summarization request.
+4. If the opaque checkpoint cannot be replayed and a safe portable summary cannot be produced, the request is aborted rather than sent with a placeholder history.
+
+Fork-specific improvements include:
+
+- ordered `localCompactionModels` priorities for installations with several local providers;
+- configurable text fallback and portable-summary candidates with deterministic ordering;
+- visible portable-summary chunk progress in the Pi status bar;
+- serializer and replay fixes for mixed-model history, tool results, and system messages;
+- redacted debug artifacts with explicit session and provider-request boundaries.
+
+## Install this fork
+
+Install the maintained fork rather than the similarly named upstream npm package:
 
 ```bash
-# Install this fork; replace main with a reviewed commit SHA to pin its behavior.
 pi install git:github.com/chenhaoxiang/pi-better-compaction@main
 ```
 
-The upstream npm package `@lll9p/pi-better-compaction` is a separate release and may not contain this fork's changes. After installation, run `/reload`.
+For reproducible behavior, pin a reviewed commit instead of `main`:
+
+```bash
+pi install git:github.com/chenhaoxiang/pi-better-compaction@<reviewed-commit>
+```
+
+Restart Pi or run `/reload` after installation. Do not remove or downgrade the extension while an active session depends on an opaque checkpoint; the older runtime may not be able to reconstruct the hidden context.
 
 ## Requirements
 
-- **pi** ≥ 0.87.1 (`@earendil-works/pi-coding-agent >= 0.87.1`); the earlier 0.84.3 runtime lacks the public session-projection export required for edit-aware portability.
+- Pi with `@earendil-works/pi-coding-agent` **0.87.1 or newer**;
+- a Node runtime supported by the installed Pi;
+- no provider credential or network probe is required during extension startup.
 
 ## Configuration
 
-Config file location:
+The optional configuration file is:
 
-```
+```text
 ~/.pi/agent/extensions/pi-better-compaction/config.json
 ```
 
-If the file doesn't exist, all defaults apply. The extension never creates this file.
-
-### Defaults
+The extension does not create this file. With no file, the defaults below apply:
 
 ```jsonc
 {
@@ -45,8 +67,6 @@ If the file doesn't exist, all defaults apply. The extension never creates this 
   "compactionThinkingLevel": "off",
   "responsesCompactApis": ["openai-responses", "openai-codex-responses"],
   "allowCompactionContinuityBreak": false,
-
-  // Debug & logging
   "notifyOnLoad": false,
   "debug": false,
   "logProviderPayloads": false,
@@ -56,26 +76,21 @@ If the file doesn't exist, all defaults apply. The extension never creates this 
 }
 ```
 
-### Options reference
+| Option | Purpose |
+| --- | --- |
+| `enabled` | Disable new compaction work while retaining the safety guard for an existing opaque checkpoint. |
+| `compactionVersion` | Select the Responses protocol, `v1` or `v2`; `v2` is the default. |
+| `compactionModel` | First explicit text fallback and first portable-summary candidate, in `provider/model` form. |
+| `additionalCompactionModels` | Additional text candidates attempted in order. |
+| `localCompactionModels` | Ordered `{ modelId, thinkingLevel }` priorities for registered providers whose name contains `local`. |
+| `compactionThinkingLevel` | Thinking level for the legacy explicit-provider fallback. |
+| `responsesCompactApis` | Narrow the built-in set of APIs that receive a native attempt. |
+| `allowCompactionContinuityBreak` | Allow a new native attempt after a checkpoint created by Pi's default compaction; this trades away opaque-window continuity. |
+| `debug` / logging options | Write lifecycle, request, and compact-response artifacts. Keep the artifact directory private. |
+| `redactSensitiveData` | Redact key-like values in debug artifacts; keep this enabled unless a controlled local investigation requires otherwise. |
+| `artifactRoot` | Change the local debug-artifact root. |
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | `boolean` | `true` | Set `false` to stop new native/fallback compaction and replay. A prior opaque-only checkpoint still triggers the safety abort guard; disabling cannot make its placeholder a real summary. |
-| `compactionVersion` | `"v1" \| "v2"` | `"v2"` | Protocol for Responses-family APIs. **V2** (streaming, encrypted blob) is the current OpenAI default. **V1** uses the legacy `/responses/compact` endpoint. |
-| `compactionModel` | `string \| null` | `null` | First text fallback after native failure and first portable summarizer on an actual incompatible-model request. Format: `"provider/model-id"`; `null` skips this candidate. |
-| `additionalCompactionModels` | `string[]` | `[]` | Additional text summarizers tried in order after `compactionModel`, before Pi's default/current model. Invalid entries are skipped with warnings; duplicates are attempted once. |
-| `localCompactionModels` | `{modelId, thinkingLevel}[]` | `[]` | When nonempty, replaces the two explicit-provider lists with ordered model-ID priorities. Only models registered in Pi whose provider name contains the exact substring `local` qualify. Multiple qualifying providers for one ID are attempted in provider-name order. Missing or unauthenticated candidates are skipped; a failed compaction moves to the next candidate without a separate live probe. |
-| `compactionThinkingLevel` | `string` | `"off"` | Thinking level for the legacy explicit-provider fallback. Each `localCompactionModels` entry uses its own level. One of: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
-| `responsesCompactApis` | `string[]` | `["openai-responses", "openai-codex-responses"]` | Which Responses APIs use native compaction. Can only narrow the built-in set; unknown entries are ignored with a warning. |
-| `allowCompactionContinuityBreak` | `boolean` | `false` | Allow restarting native compaction when the latest session compaction was created by pi's default path (not this extension). Sacrifices opaque-window continuity at that boundary. |
-| `notifyOnLoad` | `boolean` | `false` | Show a notification in the TUI when the extension loads. |
-| `debug` | `boolean` | `false` | Write lifecycle and compaction-event debug artifacts. |
-| `logProviderPayloads` | `boolean` | `false` | Write `before_provider_request` payload artifacts. |
-| `logCompactResponses` | `boolean` | `false` | Write compact endpoint request/response artifacts. |
-| `redactSensitiveData` | `boolean` | `true` | Redact secrets in debug artifacts. |
-| `artifactRoot` | `string` | `"~/.pi/agent/artifacts/pi-better-compaction"` | Root directory for debug artifacts. Supports `~/` and relative paths (resolved against config dir). |
-
-### Example: ordered text fallbacks
+Example ordered fallback configuration:
 
 ```json
 {
@@ -85,9 +100,7 @@ If the file doesn't exist, all defaults apply. The extension never creates this 
 }
 ```
 
-Model entries are explicit provider/model choices. Do not put an untrusted relay in this list unless its own directory and content policy permits it.
-
-### Example: local model-ID priority
+Example local model-ID priorities:
 
 ```json
 {
@@ -99,36 +112,19 @@ Model entries are explicit provider/model choices. Do not put an untrusted relay
 }
 ```
 
-Native Responses compaction **still runs first**. If it fails, the above text models run in order; Pi's default text compaction runs last before any opaque checkpoint exists. On an incompatible request **after** a native checkpoint, the same priority is used for a portable summary, followed by the active model; if none can safely summarize, the request is aborted. A successful candidate stops the chain. Registration and auth are checked without sending an extra model-probe request; actual compaction errors advance to the next candidate. The `local` name filter is **not proof of a local endpoint or trusted transport**; inspect provider configuration separately. Pi's native and default/current-model paths are not restricted by this candidate filter. If a preferred candidate is the active model, the extension explicitly calls Pi's `compact()` at the configured thinking level; unlike Pi's default path, this call has no Pi streaming callback, though the method remains visible in the status bar.
+Native compaction still runs first. The `local` provider-name filter is only a selection convention; it is not proof that a provider is local or trusted.
 
-### Example: force V1 compaction protocol
+## Safety boundaries
 
-```json
-{
-  "compactionVersion": "v1"
-}
-```
-
-## How it works
-
-When pi triggers compaction (`session_before_compact`):
-
-1. **Responses API detected** → run native compaction (V2 or V1 per config):
-   - **V2**: streams a request with `compaction_trigger` to `/responses`; the API returns an encrypted compaction blob. Retained user/developer messages + blob form the compacted context.
-   - **V1**: POSTs to `/responses/compact`; receives an opaque compacted window.
-   - On success, the compacted window is stored and replayed on subsequent requests via `before_provider_request`.
-
-2. **Not a Responses API, or native compact failed before any opaque checkpoint** → try `localCompactionModels` when nonempty (otherwise `compactionModel` then `additionalCompactionModels`) using Pi's text `compact()`. On success stop; on abort cancel; if all configured models fail, Pi's default compaction receives the still-full context. **If a prior opaque checkpoint exists and a new native attempt fails**, rebuild the full pending history from raw session entries and try the configured portable summarizers followed by the current model; if all fail, cancel instead of asking Pi to summarize a marker.
-
-3. **After a native checkpoint, on the first actual incompatible-model request** → rebuild the branch's hidden history with Pi context edits, produce a bounded portable text summary with the same configured model order (then the selected model), and persist it as branch-sensitive non-context state. On subsequent requests reuse it; on the original model keep native replay. Mixed-model history follows Pi's Responses serialization: foreign reasoning signatures are not replayed to the native model, and text/tool IDs are normalized for both compaction and checkpoint replay. Provider-free tests compare the local serializer with Pi's converter. If summarization or replay cannot proceed safely, abort the request and keep the session intact.
-
-When a UI is available, compaction shows the current method and model in the status bar; portable summaries additionally show the candidate and sequential chunk progress (`chunk N/M`, including start/completion/failure). This is observability only: it does not add a hard timeout or change the existing retry/fallback order. A notification identifies a successful native checkpoint, text/portable summary, or confirmed Pi-default completion. Selection of the native method is by API type, not provider — any compatible Responses API gets a native attempt. A terminal V2 SSE `response.failed`/`error` is not retried. An incomplete stream after a compaction item is never persisted or automatically retried; a pre-output transport interruption may use the bounded retry policy before falling through to text compaction. Native V1/V2 usage enters Pi's compaction totals when the provider reports it. On-demand portable-summary usage is stored with its custom session entry for audit but cannot currently enter Pi `/session` totals through the read-only extension session API.
-
-**Do not uninstall or downgrade this fork while an active session depends on an opaque checkpoint.** Removing the extension also removes its request guard; an older version can send the placeholder without the hidden context. Finish or verify a portable continuation first, or keep the pinned version for that session.
+- A fallback candidate is used only when the current compaction attempt failed before it produced a usable checkpoint.
+- A portable summary is generated only for an actual incompatible-model request after native compaction.
+- If raw session history cannot be rebuilt or the candidate chain cannot produce a safe summary, the request fails closed.
+- The extension never writes Pi's `settings.json`, `models.json`, or session history outside its own extension state and debug artifacts.
+- Debug artifacts can contain prompts, tool output, and provider payloads. Store them locally and treat them as sensitive even when redaction is enabled.
 
 ## Debugging
 
-Enable debug artifacts:
+Enable local artifacts, then reload and exercise compaction:
 
 ```json
 {
@@ -137,9 +133,9 @@ Enable debug artifacts:
 }
 ```
 
-Then `/reload`, run `/compact`, send a follow-up message, and inspect. Debug artifacts can still contain prompts and tool output even with key-pattern redaction; keep them private:
+Run `/reload`, invoke `/compact`, switch to an incompatible model, and inspect:
 
-```
+```text
 <artifactRoot>/sessions/<session-id>/
 ├── provider-requests/
 ├── compact-responses/
@@ -147,15 +143,18 @@ Then `/reload`, run `/compact`, send a follow-up message, and inspect. Debug art
 └── lifecycle/
 ```
 
-## Tests
+## Development and tests
+
+Tests are provider-free and must not use production credentials or private session data:
 
 ```bash
 npm install --ignore-scripts --package-lock=false
-npm test               # All tests are provider-free; RPC load and abort use synthetic local models
-npm run test:coverage  # Baseline-pinned non-regression, not a 100% coverage claim
+npm test
+npm run test:coverage
+npm run test:pi
 ```
 
-CI also checks every instrumented changed runtime source line against its PR patch. The [coverage baseline](test/coverage-baseline.json) was measured on fork main `481b30e` (2612/3306 lines, 224/250 functions); Bun reported no branch coverage, so branch coverage is explicitly **not** a passing gate. Strict TypeScript checking still has 21 pre-existing errors on that baseline and is not claimed green by this CI. No test sends a prompt to a real provider.
+The coverage command checks the repository's pinned non-regression baseline. A passing local test suite does not by itself prove a real-provider run, a Git merge, or a published package.
 
 ## License
 
