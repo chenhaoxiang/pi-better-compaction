@@ -66,6 +66,7 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@main
 | `additionalCompactionModels` | `string[]` | `[]` | 在 `compactionModel` 之后依次尝试的其他文本模型，最后才用 Pi 默认/当前模型。无效项会告警跳过，重复项只试一次。 |
 | `localCompactionModels` | `{modelId, thinkingLevel}[]` | `[]` | 非空时取代上述两项按渠道指定的模型列表，按模型 ID 排序；仅选择 Pi 已注册、渠道名包含原样字符串 `local` 的候选。同一型号有多个合格渠道时按渠道名顺序尝试。未注册或鉴权不可用则跳过，实际压缩失败再试下一项，不额外调用模型做预探测。 |
 | `compactionThinkingLevel` | `string` | `"off"` | 原有按渠道指定的回退模型所用思考级别；`localCompactionModels` 各项独立指定。可选：`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。 |
+| `responsesCompactApis` | `string[]` | `["openai-responses", "openai-codex-responses"]` | 使用原生压缩的 Responses API 列表。只能缩小内置集合，未知项会被忽略并告警。 |
 | `responsesCompactApis` | `string[]` | `["openai-responses", "openai-codex-responses"]` | 启用原生压缩的 Responses API 列表。只能缩小内置集合，不能添加新值。 |
 | `allowCompactionContinuityBreak` | `boolean` | `false` | 当会话最近一次压缩不是本扩展创建的时，是否允许重新开始原生压缩。会在该边界处牺牲不透明窗口的连续性。 |
 | `notifyOnLoad` | `boolean` | `false` | 扩展加载时在 TUI 中显示通知。 |
