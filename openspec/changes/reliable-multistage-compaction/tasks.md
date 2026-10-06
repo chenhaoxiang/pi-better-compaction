@@ -31,7 +31,7 @@
 - [x] 5.1 Integrate community signed-block compaction and lazy compatibility loading without deleting existing Responses/portable guards.
 - [x] 5.2 Pin OpenAI opaque-to-Anthropic compaction/request safety, placeholder rejection and actual usage accounting with synthetic tests; preserve all prior assertions.
 - [x] 5.3 Run full provider-free tests, baseline/patch coverage, RPC/abort smoke, strict OpenSpec and package checks.
-- [ ] 5.4 Obtain fresh-context independent Kimi read-only review bound to exact candidate, resolve blockers and required CI, then regular-merge/release/install with prior source preserved.
+- [ ] 5.4 Obtain fresh-context independent heterogeneous read-only review bound to exact candidate (Kimi preferred; if unavailable use the current authorized heterogeneous pool and record actual model), resolve blockers and required CI, then regular-merge/release/install with prior source preserved.
 
 ### Local model priority acceptance and handoff (2026-09-27)
 
