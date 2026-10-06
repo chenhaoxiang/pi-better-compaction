@@ -27,7 +27,7 @@ Fork-specific improvements include:
 
 ## Releases and branch policy
 
-The maintained release is **0.7.1-fork.1**, based on community **0.7.1**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+The maintained release is **0.7.2-fork.1**, based on community **0.7.2**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -36,7 +36,7 @@ The maintained release is **0.7.1-fork.1**, based on community **0.7.1**. Fork r
 Install a reproducible release:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.1-fork.1
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.2-fork.1
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
@@ -56,6 +56,12 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@<reviewed-commit>
 ```
 
 Restart Pi or run `/reload` after installation. Do not remove or downgrade the extension while an active session depends on an opaque checkpoint; the older runtime may not be able to reconstruct the hidden context.
+
+## Anthropic on-demand compaction
+
+For `anthropic-messages`, the extension uses the provider’s `compact-2026-09-04` beta on demand when Pi compacts, then stores the signed block and its readable text. Matching provider/API/model/base URL can replay the block; other models use the real text summary. An HTTP 400 after block replay retires the block and preserves plaintext history. The Pi-AI compatibility helper is loaded lazily; unavailable beta/helper paths enter the configured fallback instead of breaking Responses startup.
+
+An existing OpenAI opaque checkpoint is **never** summarized as a placeholder by the Anthropic branch: raw-history portability is prepared first, or the request/compaction is aborted. Actual reported input/output/cache usage is recorded; missing/invalid usage is not invented. Tests use synthetic transports, not real accounts; real-provider beta acceptance remains unverified.
 
 ## Requirements
 

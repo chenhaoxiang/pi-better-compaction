@@ -26,6 +26,13 @@
 - [x] 4.2 Use the same ordered candidates for pre-checkpoint text compaction and post-checkpoint portable summaries; report current/confirmed method in UI while preserving the opaque-marker abort boundary.
 - [x] 4.3 Document configuration and its lexical-filter limitation in both READMEs; run strict OpenSpec validation, provider-free tests, coverage patch gate and independent review before proposing a fork PR. Merge/install only after the applicable gate and explicit authorization.
 
+## 5. Follow-up: community 0.7.2 Anthropic integration (2026-10-06)
+
+- [x] 5.1 Integrate community signed-block compaction and lazy compatibility loading without deleting existing Responses/portable guards.
+- [x] 5.2 Pin OpenAI opaque-to-Anthropic compaction/request safety, placeholder rejection and actual usage accounting with synthetic tests; preserve all prior assertions.
+- [x] 5.3 Run full provider-free tests, baseline/patch coverage, RPC/abort smoke, strict OpenSpec and package checks.
+- [ ] 5.4 Obtain fresh-context independent Kimi read-only review bound to exact candidate, resolve blockers and required CI, then regular-merge/release/install with prior source preserved.
+
 ### Local model priority acceptance and handoff (2026-09-27)
 
 - Fork PR [#8](https://github.com/chenhaoxiang/pi-better-compaction/pull/8) merged with the ordinary merge method at `3b81f2ae84ff5872c010ffef94cae3311220f878`; candidate head `aa969dc3d0a0a34c5b92f4711a6d773f937e1ad1` is an ancestor of remote and canonical local `main`. The public fork was unlisted in the workspace S-rating registry, so no AI auto-merge verdict was claimed; the owner explicitly approved this merge and machine-wide installation after reviewing the green PR.
