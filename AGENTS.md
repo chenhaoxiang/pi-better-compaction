@@ -2,7 +2,15 @@
 
 This repository is a Pi extension. Keep compaction behavior, provider transport, session persistence, and debug logging compatible with the supported Pi version in `package.json`. Never assume that an opaque native checkpoint is a portable text summary.
 
+## Fork maintenance
+
+- `main` is the maintained integration/release branch; do not replace it with the community tree.
+- `upstream-main` only mirrors `lll9p/pi-better-compaction` main. Use a read-only `upstream` remote restricted to that branch.
+- Publish each validated version as `v<community-version>-fork.<revision>` with a GitHub Release, installable tarball, provenance manifest, and SHA-256 checksums. Do not publish to the upstream npm namespace.
+
 ## Documentation map
+
+- `docs/releasing.md`: fork versioning, branches, release/install verification, and retained community baseline.
 
 - `README.md` / `README.zh-CN.md`: user installation, configuration, safety limits, and testing commands.
 - `openspec/changes/reliable-multistage-compaction/`: current behavior contract (`specs/reliable-compaction/spec.md`), design rationale, and high-then-medium delivery tasks. This is the owner change for the native-first, lazy-portability, and ordered-fallback work; do not create a competing spec.

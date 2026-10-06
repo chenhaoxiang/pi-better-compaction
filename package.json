@@ -1,18 +1,18 @@
 {
   "name": "@lll9p/pi-better-compaction",
-  "version": "0.7.1",
+  "version": "0.7.1-fork.1",
   "type": "module",
   "description": "Better compaction for pi: native /responses/compact replay for OpenAI Responses APIs, plus a configurable compaction model driving pi's native summarization everywhere else.",
   "author": "Lilin Lao",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lll9p/pi-better-compaction.git"
+    "url": "git+https://github.com/chenhaoxiang/pi-better-compaction.git"
   },
   "bugs": {
-    "url": "https://github.com/lll9p/pi-better-compaction/issues"
+    "url": "https://github.com/chenhaoxiang/pi-better-compaction/issues"
   },
-  "homepage": "https://github.com/lll9p/pi-better-compaction#readme",
+  "homepage": "https://github.com/chenhaoxiang/pi-better-compaction#readme",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -53,6 +53,7 @@
     "src/usage.ts",
     "README.md",
     "README.zh-CN.md",
+    "docs/releasing.md",
     "LICENSE"
   ],
   "scripts": {
