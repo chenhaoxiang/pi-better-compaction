@@ -25,6 +25,22 @@ Fork-specific improvements include:
 - serializer and replay fixes for mixed-model history, tool results, and system messages;
 - redacted debug artifacts with explicit session and provider-request boundaries.
 
+## Releases and branch policy
+
+The maintained release is **0.7.1-fork.1**, based on community **0.7.1**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+
+- `main`: our maintained integration and release branch, including fork fixes.
+- `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
+- Changes enter `main` through reviewed pull requests; existing branches and history are retained.
+
+Install a reproducible release:
+
+```bash
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.1-fork.1
+```
+
+[GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
+
 ## Install this fork
 
 Install the maintained fork rather than the similarly named upstream npm package:
