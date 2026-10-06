@@ -492,9 +492,8 @@ function sumPortableUsage(records: Array<{ usage: NonNullable<CompactionResult["
 	return total;
 }
 
-function getAnthropicIdentity(ctx: ExtensionContext): NativeCompactionIdentity | undefined {
-	const model = ctx.model;
-	const baseUrl = normalizeBaseUrl(model?.baseUrl);
+function getAnthropicIdentity(model: ExtensionContext["model"], resolvedBaseUrl?: string): NativeCompactionIdentity | undefined {
+	const baseUrl = normalizeBaseUrl(resolvedBaseUrl ?? model?.baseUrl);
 	if (!model || model.api !== ANTHROPIC_MESSAGES_API || !baseUrl) {
 		return undefined;
 	}
@@ -512,27 +511,30 @@ async function runAnthropicCompact(
 	dependencies: ExtensionRuntimeDependencies,
 	state: RuntimeState,
 ): Promise<ResponsesCompactOutcome> {
-	const identity = getAnthropicIdentity(ctx);
-	if (!identity || !ctx.model) {
+	const model = ctx.model;
+	if (!model || model.api !== ANTHROPIC_MESSAGES_API) {
 		return { outcome: "failed" };
 	}
 
-	let auth: { ok: true; apiKey?: string; headers?: Record<string, string | null> } | { ok: false; error: string };
+	let auth: { ok: true; apiKey?: string; headers?: Record<string, string | null>; baseUrl?: string } | { ok: false; error: string };
 	try {
-		auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+		auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 	} catch (error) {
 		auth = { ok: false, error: error instanceof Error ? error.message : String(error) };
 	}
 	if (!auth.ok) {
 		writeDebugArtifact(
 			"compaction-event",
-			{ event: "session_before_compact.anthropic-auth-failed", errorMessage: auth.error, ...identity },
+			{ event: "session_before_compact.anthropic-auth-failed", errorMessage: auth.error, ...getCurrentModelDebugInfo(ctx) },
 			config,
 			ctx,
 		);
 		return { outcome: "failed" };
 	}
 
+	const identity = getAnthropicIdentity(model, auth.baseUrl);
+	if (!identity) return { outcome: "failed" };
+	const resolvedModel = { ...model, baseUrl: identity.baseUrl };
 	const branchEntries = ctx.sessionManager.getBranch();
 	const previous = findLatestCompactionEntry(branchEntries);
 	const priorReplay = resolveAnthropicReplay(branchEntries, identity);
@@ -553,7 +555,7 @@ async function runAnthropicCompact(
 	);
 
 	const result = await dependencies.executeAnthropicCompaction({
-		model: ctx.model,
+		model: resolvedModel,
 		apiKey: auth.apiKey,
 		headers,
 		systemPrompt: ctx.getSystemPrompt(),
@@ -618,7 +620,7 @@ async function runAnthropicCompact(
 			details,
 			// The block's plain-text summary doubles as Pi's summary after a model switch.
 			summary: result.block.content,
-			usage: mapAnthropicCompactionUsage(result.usage, ctx.model),
+			usage: mapAnthropicCompactionUsage(result.usage, resolvedModel),
 		}),
 	};
 }
@@ -933,7 +935,7 @@ async function handlePortableContext(
 	}
 }
 
-function rewriteAnthropicRequest(
+async function rewriteAnthropicRequest(
 	event: BeforeProviderRequestEvent,
 	ctx: ExtensionContext,
 	config: ExtensionConfig,
@@ -945,7 +947,12 @@ function rewriteAnthropicRequest(
 	}
 	rememberAnthropicTools(payload, getSessionId(ctx));
 
-	const identity = getAnthropicIdentity(ctx);
+	const model = ctx.model;
+	let identity: NativeCompactionIdentity | undefined;
+	try {
+		const auth = model && await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (auth?.ok) identity = getAnthropicIdentity(model, auth.baseUrl);
+	} catch { /* Without resolved identity, keep the readable summary; never replay a signature. */ }
 	const branchEntries = ctx.sessionManager.getBranch();
 	const replay = identity && payload.model === identity.model
 		? resolveAnthropicReplay(branchEntries, identity)

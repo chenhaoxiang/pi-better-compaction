@@ -193,6 +193,7 @@ describe("parseAnthropicCompactionResponse", () => {
 			{ type: "content_block_start", index: 0, content_block: { type: "compaction", content: "Part one", signature: "" } },
 			{ type: "content_block_delta", index: 0, delta: { type: "compaction_delta", content: " and two" } },
 			{ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-9" } },
+			{ type: "content_block_stop", index: 0 },
 			{ type: "message_delta", delta: { stop_reason: "compaction" } },
 			{ type: "message_stop" },
 		]);

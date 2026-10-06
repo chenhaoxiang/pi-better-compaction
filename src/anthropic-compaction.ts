@@ -172,45 +172,49 @@ export function parseAnthropicCompactionResponse(body: string): AnthropicCompact
 	}
 
 	const message: Record<string, unknown> = { content: [] };
-	const blocks: Record<string, unknown>[] = [];
-	let completed = false;
+	let started = false, closed = false, completed = false;
+	let block: Record<string, unknown> | undefined;
+	const invalid = () => ({ ok: false as const, errorMessage: "invalid compaction event order" });
 	for (const line of body.split("\n")) {
 		if (!line.startsWith("data:")) continue;
 		let event: unknown;
-		try {
-			event = JSON.parse(line.slice(5).trim());
-		} catch {
-			return { ok: false, errorMessage: "invalid SSE data" };
-		}
-		if (!isRecord(event)) continue;
-		if (event.type === "message_stop") completed = true;
-
+		try { event = JSON.parse(line.slice(5).trim()); }
+		catch { return { ok: false, errorMessage: "invalid SSE data" }; }
+		if (!isRecord(event)) return invalid();
 		if (event.type === "error") {
 			const error = isRecord(event.error) ? event.error : event;
 			return { ok: false, errorMessage: String(error.message ?? JSON.stringify(error)) };
 		}
-		if (event.type === "message_start" && isRecord(event.message)) {
-			message.id = event.message.id;
+		if (event.type === "ping") continue;
+		if (completed) return invalid();
+		if (event.type === "message_start") {
+			if (started || !isRecord(event.message) || !isNonEmptyString(event.message.id)) return invalid();
+			started = true; message.id = event.message.id;
 			if (isRecord(event.message.usage)) message.usage = event.message.usage;
-		} else if (event.type === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
-			blocks[event.index] = structuredClone(event.content_block);
-		} else if (event.type === "content_block_delta" && typeof event.index === "number" && isRecord(event.delta)) {
-			const block = blocks[event.index];
+		} else if (event.type === "content_block_start") {
+			if (!started || block || closed || event.index !== 0 || !isRecord(event.content_block)) return invalid();
+			block = structuredClone(event.content_block);
+		} else if (event.type === "content_block_delta") {
+			if (!started || !block || closed || event.index !== 0 || !isRecord(event.delta)) return invalid();
 			const delta = event.delta;
-			if (!block) continue;
 			if (delta.type === "compaction_delta") {
 				if (typeof delta.content === "string") block.content = `${block.content ?? ""}${delta.content}`;
 				if (typeof delta.encrypted_content === "string") block.encrypted_content = delta.encrypted_content;
-			} else if (delta.type === "signature_delta" && typeof delta.signature === "string") {
-				block.signature = delta.signature;
-			}
-		} else if (event.type === "message_delta" && isRecord(event.delta)) {
+			} else if (delta.type === "signature_delta" && typeof delta.signature === "string") block.signature = delta.signature;
+		} else if (event.type === "content_block_stop") {
+			if (!started || !block || closed || event.index !== 0) return invalid();
+			closed = true;
+		} else if (event.type === "message_delta") {
+			if (!started || !closed || !isRecord(event.delta)) return invalid();
 			message.stop_reason = event.delta.stop_reason;
 			if (isRecord(event.usage)) message.usage = { ...(isRecord(message.usage) ? message.usage : {}), ...event.usage };
+		} else if (event.type === "message_stop") {
+			if (!started || !closed || message.stop_reason !== "compaction") return invalid();
+			completed = true;
 		}
 	}
 	if (!completed) return { ok: false, errorMessage: "incomplete compaction stream" };
-	message.content = blocks.filter(Boolean);
+	message.content = block ? [block] : [];
 	return parseMessageObject(message);
 }
 

@@ -77,7 +77,7 @@ describe("Anthropic provider-reported usage", () => {
   test("JSON usage and SSE input/output updates are preserved for accounting", () => {
     const json = parseAnthropicCompactionResponse(JSON.stringify({ id: "message", content: [block], stop_reason: "compaction", usage: { input_tokens: 100, output_tokens: 10 } }));
     expect(json).toMatchObject({ ok: true, usage: { input_tokens: 100, output_tokens: 10 } });
-    const events = [{ type: "message_start", message: { id: "message", usage: { input_tokens: 100, cache_read_input_tokens: 20 } } }, { type: "content_block_start", index: 0, content_block: block }, { type: "message_delta", delta: { stop_reason: "compaction" }, usage: { output_tokens: 10 } }, { type: "message_stop" }];
+    const events = [{ type: "message_start", message: { id: "message", usage: { input_tokens: 100, cache_read_input_tokens: 20 } } }, { type: "content_block_start", index: 0, content_block: block }, { type: "content_block_stop", index: 0 }, { type: "message_delta", delta: { stop_reason: "compaction" }, usage: { output_tokens: 10 } }, { type: "message_stop" }];
     const parsed = parseAnthropicCompactionResponse(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(""));
     expect(parsed).toMatchObject({ ok: true, usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 20 } });
   });
@@ -93,7 +93,8 @@ test("malformed payloads, responses and replay windows cannot become checkpoints
   expect(parseAnthropicCompactionResponse(JSON.stringify({ content: [block], stop_reason: "end_turn" })).ok).toBe(false);
   expect(parseAnthropicCompactionResponse(JSON.stringify({ error: { message: "synthetic rejection" } }))).toEqual({ ok: false, errorMessage: "synthetic rejection" });
   expect(parseAnthropicCompactionResponse("data: broken\n\n").ok).toBe(false);
-  expect(parseAnthropicCompactionResponse(`data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: block })}\n\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "compaction" } })}\n\n`)).toMatchObject({ ok: false, errorMessage: "incomplete compaction stream" });
+  const unfinished = [{ type: "message_start", message: { id: "synthetic" } }, { type: "content_block_start", index: 0, content_block: block }, { type: "content_block_stop", index: 0 }, { type: "message_delta", delta: { stop_reason: "compaction" } }];
+  expect(parseAnthropicCompactionResponse(unfinished.map(e => `data: ${JSON.stringify(e)}\n\n`).join(""))).toMatchObject({ ok: false, errorMessage: "incomplete compaction stream" });
   const entry = { type: "compaction", id: "bad", timestamp: "2026-10-06T00:00:00.000Z", firstKeptEntryId: "kept", tokensBefore: 10, summary: "real text", details: createNativeCompactionDetails({ provider: anthropic.provider, api: anthropic.api, model: anthropic.id, baseUrl: anthropic.baseUrl, compactedWindow: [{}] }, "anthropic-native-compact-v1" as never) };
   expect(resolveAnthropicReplay([entry] as never, { provider: anthropic.provider, api: anthropic.api, model: anthropic.id, baseUrl: anthropic.baseUrl })).toBeUndefined();
   const h = setup();
@@ -115,4 +116,49 @@ test("transport failure, abort and missing captures fail explicitly without retr
     globalThis.fetch = (async () => new Response(JSON.stringify({ id: "synthetic", content: [block], stop_reason: "compaction", usage: { input_tokens: 3, output_tokens: 2 } }), { status: 200 })) as typeof fetch;
     expect(await invoke(async (_m: unknown, _c: unknown, options: any) => { await options.fetch("http://127.0.0.1:9"); return { stopReason: "stop" }; })).toMatchObject({ ok: true, usage: { input_tokens: 3, output_tokens: 2 } });
   } finally { globalThis.fetch = previous; }
+});
+
+test("auth-resolved endpoint governs transport and signature replay identity", async () => {
+  const branch: any[] = [user("kept", "kept")]; const h = setup({ ok: true, block }, branch);
+  let baseUrl = "http://127.0.0.1:8/enterprise/";
+  h.ctx.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: true, apiKey: "synthetic-only", baseUrl }) as never;
+  const compacted = (await h.handlers.get("session_before_compact")!(h.event, h.ctx)).compaction;
+  expect(compacted.details.baseUrl).toBe("http://127.0.0.1:8/enterprise");
+  expect(h.calls.anthropic[0].model.baseUrl).toBe("http://127.0.0.1:8/enterprise");
+  expect(anthropic.baseUrl).toBe("http://127.0.0.1:9");
+  branch.push({ type: "compaction", id: "resolved", timestamp: "2026-10-06T00:01:00.000Z", ...compacted });
+  const payload = { model: anthropic.id, messages: [{ role: "user", content: compacted.summary }] };
+  expect((await h.handlers.get("before_provider_request")!({ payload }, h.ctx)).messages[0].content).toEqual([block]);
+  baseUrl = "http://127.0.0.1:7/another-endpoint";
+  expect(await h.handlers.get("before_provider_request")!({ payload }, h.ctx)).toBeUndefined();
+  h.ctx.modelRegistry.getApiKeyAndHeaders = async () => { throw new Error("unresolved synthetic auth"); };
+  expect(await h.handlers.get("before_provider_request")!({ payload }, h.ctx)).toBeUndefined();
+});
+
+test("one-hour cache write accounting matches host pricing and rejects impossible counts", () => {
+  const model = { ...anthropic, cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 } };
+  const raw = { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 50, cache_creation: { ephemeral_1h_input_tokens: 50 } };
+  const usage = mapAnthropicCompactionUsage(raw, model as never)!;
+  expect(usage.cacheWrite1h).toBe(50); expect(usage.cost.cacheWrite).toBe(200/1000000);
+  for (const n of [-1,51,"50"]) expect(mapAnthropicCompactionUsage({ ...raw, cache_creation: { ephemeral_1h_input_tokens:n } }, model as never)).toBeUndefined();
+});
+
+test("SSE requires a started identified message, closed block, stop reason and terminal ordering", () => {
+  const events = [{ type: "message_start", message: { id: "synthetic" } }, { type: "content_block_start", index: 0, content_block: block }, { type: "content_block_stop", index: 0 }, { type: "message_delta", delta: { stop_reason: "compaction" } }, { type: "message_stop" }];
+  const parse = (data: unknown[]) => parseAnthropicCompactionResponse(data.map(e => `data: ${JSON.stringify(e)}\n\n`).join(""));
+  expect(parse(events).ok).toBe(true);
+  expect(parse(events.slice(1)).ok).toBe(false);
+  expect(parse([{ type: "message_start", message: {} }, ...events.slice(1)]).ok).toBe(false);
+  expect(parse(events.filter(e => e.type !== "content_block_stop")).ok).toBe(false);
+  expect(parse([events[0],events[0],...events.slice(1)]).ok).toBe(false);
+  expect(parse([...events,{ type:"content_block_delta",index:0,delta:{type:"compaction_delta",content:"late"}}]).ok).toBe(false);
+  expect(parse([events[0],{type:"content_block_stop",index:0},...events.slice(1)]).ok).toBe(false);
+  expect(parse([events[0],{type:"content_block_delta",index:0,delta:{type:"compaction_delta",content:"early"}},...events.slice(1)]).ok).toBe(false);
+});
+
+test("a model disappearing at the branch boundary cannot start native compaction", async () => {
+  const h = setup();let reads=0;
+  Object.defineProperty(h.ctx,"model",{get:()=>++reads===1?anthropic:undefined});
+  expect((await h.handlers.get("session_before_compact")!(h.event,h.ctx)).compaction.summary).toBe("Fallback text");
+  expect(h.calls.anthropic).toHaveLength(0);
 });
