@@ -31,7 +31,15 @@
 - [x] 5.1 Integrate community signed-block compaction and lazy compatibility loading without deleting existing Responses/portable guards.
 - [x] 5.2 Pin OpenAI opaque-to-Anthropic compaction/request safety, placeholder rejection and actual usage accounting with synthetic tests; preserve all prior assertions.
 - [x] 5.3 Run full provider-free tests, baseline/patch coverage, RPC/abort smoke, strict OpenSpec and package checks.
-- [ ] 5.4 Obtain fresh-context independent heterogeneous read-only review bound to exact candidate (Kimi preferred; if unavailable use the current authorized heterogeneous pool and record actual model), resolve blockers and required CI, then regular-merge/release/install with prior source preserved.
+- [x] 5.4 Obtain fresh-context independent heterogeneous read-only review bound to exact candidate (Kimi preferred; if unavailable use the current authorized heterogeneous pool and record actual model), resolve blockers and required CI, then regular-merge/release/install with prior source preserved.
+
+### Community 0.7.2 release and installation evidence (2026-10-06)
+
+- PR #14 regular merge/source `2909572c224f60061ca8c122e3159bc3a005a94e`, fixed [v0.7.2-fork.1](https://github.com/chenhaoxiang/pi-better-compaction/releases/tag/v0.7.2-fork.1), compiled/source tarball with provenance and SHA256SUMS. Original installed source, its untracked lockfile, config and every unrelated personal setting remained unchanged. Exactly one enabled package declaration was atomically switched to the checked release in a permanent versioned directory, not tmp/worktree; no active session was forced to reload/restart.
+- Fresh independent `codex-local/gpt-6-astra:high` initial review (Kimi quota unavailable under the authorized pool) found three P1s; retained follow-up at exact `772c0a875eb5ae8d07374c5b60ff818c4dc031ad` closed all, reported no new issues and OK with notes. Initial/follow-up hashes and full readonly reports are in PR #14 comments. This is AI engineering review, not human approval or independent execution.
+- 251 provider-free tests, coverage baseline3298/3928 lines281/307functions, exact candidate instrumented patch441/441 (201 non-instrumented; no branch metric), strict OpenSpec, RPC/abort smoke and package checks passed. Required PR CI and exact release-main CI run37409150208 both succeeded. Released assets downloaded/checksummed/RPC loaded, and the permanent installed copy passed isolated RPC with zero model requests. Legacy strict tsc and real-provider beta acceptance remain unverified/not passing claims.
+- Release tarball SHA256 `0c4b38e9b45ebfe20ed4ac4fa6b9704ab11ecb3c0fdb8514d990081024cfc077`. Signature identity uses auth-resolved endpoint; one-hour cache usage and strict SSE sequence tests remain part of the source gate. Do not downgrade/unload opaque-dependent sessions; activate the new package only when current work can safely finish.
+
 
 ### Local model priority acceptance and handoff (2026-09-27)
 
