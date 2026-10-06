@@ -22,7 +22,7 @@ Applies only to chenhaoxiang/pi-better-compaction. The community project remains
 
 ## Baseline for this release
 
-Version **0.7.1-fork.1** preserves the tested 0.7.1 fork integration. The mirror records newer community commits independently; it is not a claim that new Anthropic compaction behavior has been integrated or tested in this release. Existing opaque-checkpoint, cross-model continuity, fallback and serializer fixes remain in main.
+Version **0.7.2-fork.1** integrates community main `3675053659f3ca57f7a6a8b332b082c33351cfac`, adding Anthropic on-demand signed-block compaction while preserving opaque-checkpoint, lazy portability, fallback and serializer fixes. The merge’s API-specific early return was corrected so Anthropic cannot bypass the OpenAI opaque-history guard. Provider-reported Anthropic usage is mapped without fabricating missing counts. The previous installed cache and its untracked lockfile are preserved; fixed release installation uses a separate permanent directory.
 
 ## Publish every version
 

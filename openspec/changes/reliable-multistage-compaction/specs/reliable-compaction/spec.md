@@ -110,3 +110,18 @@ Native compact retries SHALL be limited to failures for which replaying the requ
 #### Scenario: Ambiguous interruption after compaction output
 - **WHEN** an output item has already arrived but the stream ends or throws before `response.completed`
 - **THEN** the extension neither persists the partial blob nor issues an automatic second native request; it proceeds through the configured fallback chain.
+
+### Requirement: Anthropic native blocks preserve portable history
+The extension SHALL support owner-approved Anthropic on-demand compaction without weakening any existing opaque checkpoint safety boundary. A successful signed block SHALL carry real readable summary text; only the same provider, API, model and base URL may replay the signature.
+
+#### Scenario: Native Anthropic success and identity change
+- **WHEN** Anthropic returns a valid signed compaction block and a later request changes identity
+- **THEN** the persisted readable summary remains available and the signature is not sent to the other identity.
+
+#### Scenario: Prior OpenAI opaque history
+- **WHEN** an Anthropic compaction or request follows an unresolved OpenAI opaque checkpoint
+- **THEN** the complete pending raw history is reconstructed for portability or the operation visibly aborts; the marker is never treated as a real summary.
+
+#### Scenario: Block rejected or usage absent
+- **WHEN** a replayed block is rejected with HTTP 400 or compaction usage is absent/invalid
+- **THEN** the signature is retired without deleting the readable summary, and no token/cost values are fabricated.

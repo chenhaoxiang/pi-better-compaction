@@ -37,3 +37,21 @@ export function mapResponsesCompactionUsage(raw: unknown, model: Model<Api>): Us
 	calculateCost(model, usage);
 	return usage;
 }
+
+/** Anthropic reports uncached input separately from cache creation/read tokens. */
+export function mapAnthropicCompactionUsage(raw: unknown, model: Model<Api>): Usage | undefined {
+	if (!isRecord(raw) || !nonNegativeInteger(raw.input_tokens) || !nonNegativeInteger(raw.output_tokens)) return undefined;
+	const cacheRead = raw.cache_read_input_tokens ?? 0;
+	const cacheWrite = raw.cache_creation_input_tokens ?? 0;
+	if (!nonNegativeInteger(cacheRead) || !nonNegativeInteger(cacheWrite)) return undefined;
+	const cacheWrite1h = isRecord(raw.cache_creation) ? raw.cache_creation.ephemeral_1h_input_tokens ?? 0 : 0;
+	if (!nonNegativeInteger(cacheWrite1h) || cacheWrite1h > cacheWrite) return undefined;
+	const total = raw.input_tokens + raw.output_tokens + cacheRead + cacheWrite;
+	if (!nonNegativeInteger(total)) return undefined;
+	const usage: Usage = {
+		input: raw.input_tokens, output: raw.output_tokens, cacheRead, cacheWrite, cacheWrite1h, totalTokens: total,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	calculateCost(model, usage);
+	return usage;
+}

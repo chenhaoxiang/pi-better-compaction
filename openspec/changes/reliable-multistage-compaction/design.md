@@ -8,7 +8,7 @@ See proposal.md and specs/reliable-compaction/spec.md. The fork now requires Pi 
 
 **Goals:** Preserve native quality when possible; avoid extra text calls for sessions that never actually request an incompatible model; never send a placeholder as a valid historical summary; maintain branch/reload safety and observable usage; make all tests provider-free.
 
-**Non-Goals:** New native provider strategies (including Anthropic beta), changing Pi core or provider SDKs, calling real accounts in tests, guessing raw prompt details absent from a persisted session, weakening a passing quality gate, or claiming lazy portable usage is part of Pi session totals without a public write API.
+**Non-Goals:** Native strategies beyond the owner-approved Anthropic follow-up below, changing Pi core or provider SDKs, calling real accounts in tests, guessing raw prompt details absent from a persisted session, weakening a passing quality gate, or claiming lazy portable usage is part of Pi session totals without a public write API.
 
 ## Decisions
 
@@ -25,6 +25,14 @@ See proposal.md and specs/reliable-compaction/spec.md. The fork now requires Pi 
 Keep the native Responses attempt first. A nonempty `localCompactionModels` configuration selects exact model IDs across currently registered providers whose name contains `local`; order model IDs as configured and then qualifying providers by name. This overrides the legacy explicit-provider list only when nonempty, so existing installations retain their original behavior. Resolve credentials through Pi's registry, then let the actual compaction call decide availability; do not add a separate charged/network probe. Each entry owns its thinking level, including when it names the active model. For an opaque history recovery, retain the active model as the final safe summarizer before abort rather than passing Pi an opaque marker. The local-name check cannot attest to transport destination or trust, and Pi's native/default paths remain outside that filter.
 
 UI status reports the current native/text/portable strategy while work runs. Native or text strategy reports its returned result; Pi's default only reports completion after `session_compact`. `session_compact_failed` clears transient status. All model tests use synthetic registry/auth and no production call. This follow-up extends the existing change, not a second competing spec.
+
+## Follow-up: community Anthropic integration (2026-10-06)
+
+Owner authorized incorporating community 0.7.2. Anthropic Messages compaction stores a signed block and its readable summary, keyed by provider/API/model/base URL. Cross-identity requests use the real text. A 400 following block replay retires the block without deleting the summary. The compatibility completion module is lazily imported; tests inject synthetic completion/fetch implementations. This does not authorize real-model tests.
+
+The merge must preserve the existing OpenAI opaque-history invariant: a prior opaque checkpoint bypasses the Anthropic summary request and enters raw pending-history portability; an incompatible provider request without prepared portability explicitly aborts, even when it omits the marker on the wire. Placeholder content cannot become a successful Anthropic checkpoint. Existing tests stay frozen.
+
+Valid vendor input/output/cache token counts are mapped using Pi-AI calculateCost and attached to the native compaction result; malformed/missing counts are not invented. Signature replay does not imply text parity with opaque state. Preserve old installation bytes/config/lockfile and do not force-reload active sessions.
 
 ## Risks / Trade-offs
 

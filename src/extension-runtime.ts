@@ -7,6 +7,17 @@ import type {
 	ExtensionContext,
 	SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import {
+	ANTHROPIC_BLOCK_REJECTED_ENTRY,
+	ANTHROPIC_MESSAGES_API,
+	executeAnthropicCompaction,
+	getAnthropicTools,
+	isAnthropicMessagesPayload,
+	rememberAnthropicTools,
+	replaceSummaryWithBlock,
+	resolveAnthropicReplay,
+} from "./anthropic-compaction";
 import { executeNativeCompaction } from "./compact-client";
 import { executeV2Compaction } from "./compact-client-v2";
 import { loadExtensionConfig } from "./config";
@@ -24,12 +35,14 @@ import { getCompactionRequestExtras, rememberRequestContext } from "./request-co
 import { buildRetainedMessages } from "./retained-messages";
 import {
 	isResponsesCompatiblePayload,
+	normalizeBaseUrl,
 	resolveNativeCompactionEnvironment,
 	type NativeCompactionRuntime,
 } from "./runtime";
 import { serializeMessagesToCompactRequest, type NativeCompactionRequestBody, type ResponsesInputItem } from "./serializer";
-import { mapResponsesCompactionUsage } from "./usage";
+import { mapAnthropicCompactionUsage, mapResponsesCompactionUsage } from "./usage";
 import {
+	ANTHROPIC_COMPACTION_STRATEGY,
 	createNativeCompactionDetails,
 	createNativeCompactionResult,
 	DEFAULT_EXTENSION_CONFIG,
@@ -40,6 +53,7 @@ import {
 	NATIVE_COMPACTION_FALLBACK_SUMMARY,
 	type ExtensionConfig,
 	type NativeCompactionDetails,
+	type NativeCompactionIdentity,
 	type NativeCompactionRequestMeta,
 } from "./types";
 
@@ -54,6 +68,15 @@ export type ExtensionRuntimeDependencies = {
 	executeV2Compaction: typeof executeV2Compaction;
 	runNativeFallbackCompaction: typeof runNativeFallbackCompaction;
 	summarizePortableHistory: typeof summarizePortableHistory;
+	executeAnthropicCompaction: typeof executeAnthropicCompaction;
+};
+
+/** Per-registration state shared by the provider request and response hooks. */
+type RuntimeState = {
+	getThinkingLevel?: () => ThinkingLevel | undefined;
+	appendEntry?: (customType: string, data?: unknown) => void;
+	/** Compaction entry whose block the in-flight provider request carries. */
+	pendingAnthropicReplay?: string;
 };
 
 const DEFAULT_DEPENDENCIES: ExtensionRuntimeDependencies = {
@@ -62,6 +85,7 @@ const DEFAULT_DEPENDENCIES: ExtensionRuntimeDependencies = {
 	executeV2Compaction,
 	runNativeFallbackCompaction,
 	summarizePortableHistory,
+	executeAnthropicCompaction,
 };
 
 function buildCompactionRequestMeta(event: SessionBeforeCompactEvent): NativeCompactionRequestMeta {
@@ -468,10 +492,144 @@ function sumPortableUsage(records: Array<{ usage: NonNullable<CompactionResult["
 	return total;
 }
 
+function getAnthropicIdentity(model: ExtensionContext["model"], resolvedBaseUrl?: string): NativeCompactionIdentity | undefined {
+	const baseUrl = normalizeBaseUrl(resolvedBaseUrl ?? model?.baseUrl);
+	if (!model || model.api !== ANTHROPIC_MESSAGES_API || !baseUrl) {
+		return undefined;
+	}
+	return { provider: model.provider, api: model.api, model: model.id, baseUrl };
+}
+
+/**
+ * Anthropic on-demand compaction: summarize what Pi would discard, server-side,
+ * and keep the signed block for replay. Pi's kept messages stay verbatim.
+ */
+async function runAnthropicCompact(
+	event: SessionBeforeCompactEvent,
+	ctx: ExtensionContext,
+	config: ExtensionConfig,
+	dependencies: ExtensionRuntimeDependencies,
+	state: RuntimeState,
+): Promise<ResponsesCompactOutcome> {
+	const model = ctx.model;
+	if (!model || model.api !== ANTHROPIC_MESSAGES_API) {
+		return { outcome: "failed" };
+	}
+
+	let auth: { ok: true; apiKey?: string; headers?: Record<string, string | null>; baseUrl?: string } | { ok: false; error: string };
+	try {
+		auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	} catch (error) {
+		auth = { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+	if (!auth.ok) {
+		writeDebugArtifact(
+			"compaction-event",
+			{ event: "session_before_compact.anthropic-auth-failed", errorMessage: auth.error, ...getCurrentModelDebugInfo(ctx) },
+			config,
+			ctx,
+		);
+		return { outcome: "failed" };
+	}
+
+	const identity = getAnthropicIdentity(model, auth.baseUrl);
+	if (!identity) return { outcome: "failed" };
+	const resolvedModel = { ...model, baseUrl: identity.baseUrl };
+	const branchEntries = ctx.sessionManager.getBranch();
+	const previous = findLatestCompactionEntry(branchEntries);
+	const priorReplay = resolveAnthropicReplay(branchEntries, identity);
+	const messages: AgentMessage[] = [
+		...(previous
+			? [{
+				role: "compactionSummary",
+				summary: previous.summary,
+				tokensBefore: previous.tokensBefore,
+				timestamp: new Date(previous.timestamp).getTime(),
+			} as AgentMessage]
+			: []),
+		...event.preparation.messagesToSummarize,
+		...event.preparation.turnPrefixMessages,
+	];
+	const headers = Object.fromEntries(
+		Object.entries(auth.headers ?? {}).filter((header): header is [string, string] => header[1] !== null),
+	);
+
+	const result = await dependencies.executeAnthropicCompaction({
+		model: resolvedModel,
+		apiKey: auth.apiKey,
+		headers,
+		systemPrompt: ctx.getSystemPrompt(),
+		messages,
+		priorReplay,
+		tools: getAnthropicTools(identity.model, getSessionId(ctx)),
+		instructions: event.customInstructions,
+		reasoning: state.getThinkingLevel?.(),
+		sessionId: getSessionId(ctx),
+		signal: event.signal,
+	});
+	if (!result.ok) {
+		writeDebugArtifact(
+			"compaction-event",
+			{
+				event: "session_before_compact.anthropic-compact-failure",
+				reason: result.reason,
+				status: result.status,
+				errorMessage: result.errorMessage,
+				...identity,
+			},
+			config,
+			ctx,
+		);
+		if (result.reason !== "aborted") {
+			notifyWarning(ctx, `Anthropic server compaction failed (${result.errorMessage ?? result.reason}); using fallback compaction`);
+		}
+		return result.reason === "aborted" ? { outcome: "aborted" } : { outcome: "failed" };
+	}
+
+	if (result.block.content.trim() === NATIVE_COMPACTION_FALLBACK_SUMMARY) {
+		return { outcome: "failed" };
+	}
+
+	const details = createNativeCompactionDetails(
+		{
+			...identity,
+			compactedWindow: [result.block],
+			compactResponseId: result.messageId,
+			requestMeta: buildCompactionRequestMeta(event),
+		},
+		ANTHROPIC_COMPACTION_STRATEGY,
+	);
+	writeDebugArtifact(
+		"compaction-event",
+		{
+			event: "session_before_compact.anthropic-compact-success",
+			...identity,
+			compactResponseId: result.messageId,
+			priorBlockReplayed: Boolean(priorReplay),
+			summarizedMessages: messages.length,
+			firstKeptEntryId: event.preparation.firstKeptEntryId,
+		},
+		config,
+		ctx,
+	);
+	return {
+		outcome: "success",
+		compaction: createNativeCompactionResult({
+			firstKeptEntryId: event.preparation.firstKeptEntryId,
+			tokensBefore: event.preparation.tokensBefore,
+			details,
+			// The block's plain-text summary doubles as Pi's summary after a model switch.
+			summary: result.block.content,
+			usage: mapAnthropicCompactionUsage(result.usage, resolvedModel),
+		}),
+	};
+}
+
 async function handleSessionBeforeCompact(
 	event: SessionBeforeCompactEvent,
 	ctx: ExtensionContext,
 	dependencies: ExtensionRuntimeDependencies,
+	state: RuntimeState = {},
 ) {
 	const { config } = dependencies.loadExtensionConfig();
 	if (!config.enabled) {
@@ -500,7 +658,21 @@ async function handleSessionBeforeCompact(
 		return { cancel: true };
 	}
 
-	// Branch 1: Responses-family APIs use the native /responses/compact endpoint.
+	// Branch 1a: Anthropic Messages uses on-demand server-side compaction.
+	if (ctx.model?.api === ANTHROPIC_MESSAGES_API &&
+		event.preparation.previousSummary !== NATIVE_COMPACTION_FALLBACK_SUMMARY &&
+		!latestOpaqueMarker(ctx.sessionManager.getBranch())) {
+		const anthropicOutcome = await runAnthropicCompact(event, ctx, config, dependencies, state);
+		if (anthropicOutcome.outcome === "success") {
+			return { compaction: anthropicOutcome.compaction };
+		}
+		if (anthropicOutcome.outcome === "aborted") {
+			return { cancel: true };
+		}
+		// failed: fall through; the Responses branch declines and the fallback runs.
+	}
+
+	// Branch 1b: Responses-family APIs use the native /responses/compact endpoint.
 	const resolution = await resolveNativeCompactionEnvironment(ctx, {
 		enabled: config.enabled,
 		responsesCompactApis: config.responsesCompactApis,
@@ -763,10 +935,55 @@ async function handlePortableContext(
 	}
 }
 
+async function rewriteAnthropicRequest(
+	event: BeforeProviderRequestEvent,
+	ctx: ExtensionContext,
+	config: ExtensionConfig,
+	state: RuntimeState,
+) {
+	const payload = event.payload;
+	if (!isAnthropicMessagesPayload(payload)) {
+		return undefined;
+	}
+	rememberAnthropicTools(payload, getSessionId(ctx));
+
+	const model = ctx.model;
+	let identity: NativeCompactionIdentity | undefined;
+	try {
+		const auth = model && await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (auth?.ok) identity = getAnthropicIdentity(model, auth.baseUrl);
+	} catch { /* Without resolved identity, keep the readable summary; never replay a signature. */ }
+	const branchEntries = ctx.sessionManager.getBranch();
+	const replay = identity && payload.model === identity.model
+		? resolveAnthropicReplay(branchEntries, identity)
+		: undefined;
+	if (!replay) {
+		return undefined;
+	}
+
+	const rewritten = replaceSummaryWithBlock(payload, replay.entry.summary, replay.block);
+	writeDebugArtifact(
+		"provider-request",
+		{
+			event: rewritten ? "before_provider_request.anthropic-replay" : "before_provider_request.anthropic-replay-skip",
+			...identity,
+			compactionEntryId: replay.entry.id,
+			payload: rewritten ?? payload,
+		},
+		config,
+		ctx,
+	);
+	if (rewritten) {
+		state.pendingAnthropicReplay = replay.entry.id;
+	}
+	return rewritten;
+}
+
 async function handleBeforeProviderRequest(
 	event: BeforeProviderRequestEvent,
 	ctx: ExtensionContext,
 	dependencies: ExtensionRuntimeDependencies,
+	state: RuntimeState = {},
 ) {
 	const { config } = dependencies.loadExtensionConfig();
 	const branchEntries = ctx.sessionManager.getBranch();
@@ -782,6 +999,15 @@ async function handleBeforeProviderRequest(
 		return undefined;
 	}
 	if (ctx.signal?.aborted) return undefined;
+
+	state.pendingAnthropicReplay = undefined;
+	if (ctx.model?.api === ANTHROPIC_MESSAGES_API) {
+		if (placeholderOnWire || (opaqueCheckpoint && !hasCurrentPortableSummary(branchEntries, opaqueCheckpoint))) {
+			abortOpaqueRequest(ctx, config, "anthropic-request-with-opaque-placeholder");
+			return undefined;
+		}
+		return rewriteAnthropicRequest(event, ctx, config, state);
+	}
 
 	// Capture compact-relevant request fields (tools, reasoning, ...) for the next
 	// /responses/compact call, regardless of whether this request gets rewritten.
@@ -919,6 +1145,11 @@ export function registerExtensionRuntime(
 	pi: ExtensionAPI,
 	dependencies: ExtensionRuntimeDependencies = DEFAULT_DEPENDENCIES,
 ): void {
+	const state: RuntimeState = {
+		getThinkingLevel: () => pi.getThinkingLevel?.(),
+		appendEntry: (customType, data) => pi.appendEntry?.(customType, data),
+	};
+
 	pi.on("session_start", (_event, ctx) => {
 		const { config, source, warnings } = dependencies.loadExtensionConfig();
 		if (!config.enabled) return;
@@ -950,7 +1181,7 @@ export function registerExtensionRuntime(
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
-		try { return await handleSessionBeforeCompact(event, ctx, dependencies); }
+		try { return await handleSessionBeforeCompact(event, ctx, dependencies, state); }
 		catch (error) {
 			// Pi would otherwise swallow the exception and compact a placeholder.
 			if (event.preparation.previousSummary === NATIVE_COMPACTION_FALLBACK_SUMMARY) {
@@ -983,7 +1214,7 @@ export function registerExtensionRuntime(
 		} catch { return { action: "stop" as const }; }
 	});
 	pi.on("before_provider_request", async (event, ctx) => {
-		try { return await handleBeforeProviderRequest(event, ctx, dependencies); }
+		try { return await handleBeforeProviderRequest(event, ctx, dependencies, state); }
 		catch (error) {
 			// Pi reports handler errors but otherwise sends the unmodified payload.
 			// Never permit that behavior while it still contains our opaque marker.
@@ -997,6 +1228,16 @@ export function registerExtensionRuntime(
 		setCompactionStatus(ctx);
 		const { config } = dependencies.loadExtensionConfig();
 		if (config.enabled && !event.fromExtension) notifyCompactionMethod(ctx, "Pi default text compaction completed");
+	});
+	pi.on("after_provider_response", (event, ctx) => {
+		const compactionEntryId = state.pendingAnthropicReplay;
+		state.pendingAnthropicReplay = undefined;
+		// ponytail: any 400 on a request that carried the block retires the block; the
+		// next request replays Pi's summary instead. A 400 unrelated to the block costs
+		// server-side continuity, never correctness.
+		if (!compactionEntryId || event.status !== 400) return;
+		state.appendEntry?.(ANTHROPIC_BLOCK_REJECTED_ENTRY, { compactionEntryId });
+		notifyWarning(ctx, "provider rejected the Anthropic compaction block; replaying Pi's summary from now on");
 	});
 
 	pi.on("session_compact_failed", (event, ctx) => {
