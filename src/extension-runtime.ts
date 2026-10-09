@@ -48,9 +48,10 @@ import {
 	DEFAULT_EXTENSION_CONFIG,
 	EXTENSION_ID,
 	isNativeCompactionDetails,
+	isNativeCompactionEntry,
+	NATIVE_COMPACTION_FALLBACK_SUMMARY,
 	NATIVE_COMPACTION_STRATEGY,
 	NATIVE_COMPACTION_STRATEGY_V2,
-	NATIVE_COMPACTION_FALLBACK_SUMMARY,
 	type ExtensionConfig,
 	type NativeCompactionDetails,
 	type NativeCompactionIdentity,
@@ -77,7 +78,44 @@ type RuntimeState = {
 	appendEntry?: (customType: string, data?: unknown) => void;
 	/** Compaction entry whose block the in-flight provider request carries. */
 	pendingAnthropicReplay?: string;
+	/** `${compactionEntryId}|${provider}/${model}` pairs already warned about on model_select. */
+	warnedCheckpointSwitches?: Set<string>;
 };
+
+/**
+ * Warning for a model that cannot read the latest compaction.
+ *
+ * An OpenAI native checkpoint is an opaque window that only replays for the
+ * provider, API and model that produced it; Pi's own summary for it is only a
+ * placeholder. This fork prepares portable history before the first incompatible
+ * request or aborts it; model selection only displays advice and sends no summary request.
+ */
+export function describeUnreadableCheckpoint(
+	branchEntries: readonly SessionEntry[],
+	model: { provider: string; api: string; id: string } | undefined,
+): { key: string; message: string } | undefined {
+	const latest = findLatestCompactionEntry(branchEntries);
+	if (
+		!model || !isNativeCompactionEntry(latest) ||
+		latest.details.strategy === ANTHROPIC_COMPACTION_STRATEGY ||
+		latest.summary !== NATIVE_COMPACTION_FALLBACK_SUMMARY
+	) {
+		return undefined;
+	}
+	const { provider, api, model: checkpointModel } = latest.details;
+	// Do not compare configured base URLs: OAuth may resolve a different endpoint.
+	if (provider === model.provider && api === model.api && checkpointModel === model.id) {
+		return undefined;
+	}
+	return {
+		key: `${latest.id}|${model.provider}/${model.id}`,
+		message:
+			`the latest compaction is an OpenAI native checkpoint replayed only for ${provider}/${checkpointModel} (${api}). ` +
+			`${model.provider}/${model.id} cannot read that blob directly; retained messages alone are not enough. ` +
+			"This fork will attempt portable preparation from the active raw history on the first actual request and abort if it cannot do so safely; switching alone sends no summary request. " +
+			"For manual recovery, use /tree to branch from before the first incompatible compaction.",
+	};
+}
 
 const DEFAULT_DEPENDENCIES: ExtensionRuntimeDependencies = {
 	loadExtensionConfig,
@@ -606,6 +644,7 @@ async function runAnthropicCompact(
 			...identity,
 			compactResponseId: result.messageId,
 			priorBlockReplayed: Boolean(priorReplay),
+			retriedWithoutThinking: Boolean(result.retriedWithoutThinking),
 			summarizedMessages: messages.length,
 			firstKeptEntryId: event.preparation.firstKeptEntryId,
 		},
@@ -1238,6 +1277,16 @@ export function registerExtensionRuntime(
 		if (!compactionEntryId || event.status !== 400) return;
 		state.appendEntry?.(ANTHROPIC_BLOCK_REJECTED_ENTRY, { compactionEntryId });
 		notifyWarning(ctx, "provider rejected the Anthropic compaction block; replaying Pi's summary from now on");
+	});
+
+	pi.on("model_select", (event, ctx) => {
+		if (!ctx.hasUI || !dependencies.loadExtensionConfig().config.enabled) return;
+		const warning = describeUnreadableCheckpoint(ctx.sessionManager.getBranch(), event.model);
+		if (!warning) return;
+		state.warnedCheckpointSwitches ??= new Set();
+		if (state.warnedCheckpointSwitches.has(warning.key)) return;
+		state.warnedCheckpointSwitches.add(warning.key);
+		notifyWarning(ctx, warning.message);
 	});
 
 	pi.on("session_compact_failed", (event, ctx) => {

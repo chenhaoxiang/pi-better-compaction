@@ -12,7 +12,7 @@
 
 ## 发布版本与分支约定
 
-当前维护版本为 **0.7.2-fork.1**，基于社区 **0.7.2**。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
+当前维护版本为 **0.7.4-fork.1**，基于社区 **0.7.4**。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
 
 - `main`：我们的维护、整合与发布主线，保留 fork 修复。
 - `upstream-main`：仅镜像社区 `main`，不加入 fork 提交，也不作为安装来源。
@@ -21,7 +21,7 @@
 固定版本安装：
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.2-fork.1
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.1
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) 提供可安装的包、来源清单和 `SHA256SUMS` 校验文件；这不是向上游作者的 npm 命名空间发布。发布及制品安装流程见[维护说明](docs/releasing.md)。
@@ -38,6 +38,10 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@main
 ## Anthropic 按需压缩
 
 `anthropic-messages` 在 Pi 执行压缩时使用 `compact-2026-09-04` beta，保存签名块及其真实可读摘要。只有 provider/API/模型/base URL 同身份请求才回放签名块，其他模型继续使用文本；携带块的请求收到 HTTP 400 后退役该块，保留文本历史。兼容 helper 按需加载，beta/helper 不可用时沿配置回退，不影响 Responses 扩展启动。
+
+某些网关会在启用 thinking 时注入 `context_management`。仅遇到这个冲突对应的 HTTP 400 拒绝，扩展才移除本次摘要请求的 thinking 参数重试一次；历史思考块、真实用量和后续会话思考设置保持不变。其他失败及用户中止不会走这条重试路径。
+
+选择不兼容模型时会提示需要可移植历史，但本 fork 仍只在第一次实际请求前准备摘要；不能安全恢复时中止请求。仅切换模型不会调用摘要模型。
 
 已有 OpenAI 不透明 checkpoint 时，绝不会把占位摘要直接交给 Anthropic：先重建可移植历史，失败则明确中止。仅记录提供商实际返回且有效的输入、输出和缓存用量；缺失不编造。本轮测试全部使用合成传输，未验证真实账号的 beta 接受情况。
 
