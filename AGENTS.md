@@ -10,6 +10,8 @@ This repository is a Pi extension. Keep compaction behavior, provider transport,
 
 ## Documentation map
 
+- `docs/maintenance/2026-10-10-community-0.7.4.md`: community 0.7.4 integration, retained fork continuity/accounting, validation and release/install boundaries.
+
 - `docs/releasing.md`: fork versioning, branches, release/install verification, and retained community baseline.
 
 - `README.md` / `README.zh-CN.md`: user installation, configuration, safety limits, and testing commands.

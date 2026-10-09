@@ -463,6 +463,7 @@ function serializeAssistantMessage<TApi extends Api>(message: AssistantMessage, 
 			? undefined : rawItemId;
 		items.push({
 			type: "function_call",
+			// Keep the fork's stricter different-model rule as well as rejecting ctc_* IDs.
 			id: itemId,
 			call_id: callId,
 			name: block.name,
