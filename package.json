@@ -56,6 +56,7 @@
     "README.md",
     "README.zh-CN.md",
     "docs/releasing.md",
+    "docs/maintenance/2026-10-10-community-0.7.4.md",
     "LICENSE"
   ],
   "scripts": {
