@@ -10,7 +10,7 @@ This repository is a Pi extension. Keep compaction behavior, provider transport,
 
 ## Documentation map
 
-- `docs/maintenance/2026-10-10-community-0.7.4.md`: community 0.7.4 integration, retained fork continuity/accounting, validation and release/install boundaries.
+- `docs/maintenance/2026-10-10-community-0.7.4.md`: community 0.7.4 integration, retained fork continuity/accounting, reviewed source/CI and verified immutable release/installed acceptance.
 
 - `docs/releasing.md`: fork versioning, branches, release/install verification, and retained community baseline.
 
