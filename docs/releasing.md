@@ -33,7 +33,7 @@ Version **0.7.4-fork.1** integrates community main `724f91cd10795d005f0f00e0c399
 3. Run `npm test`, `npm run test:coverage` and `npm run test:pi` with synthetic/provider-free fixtures. Strict tsc has pre-existing errors and is not a passing gate. Review the exact diff and required CI.
 4. Merge the PR normally, then verify the remote main contains the validated head.
 5. At that exact main commit, run `npm pack --ignore-scripts --pack-destination tmp/release`. Inspect/extract the tarball and smoke-load it in an isolated Pi agent directory without model requests.
-6. Write `release-manifest.json` with repository, version, exact source commit, community base, mirror tip, package filename and SHA-256. Generate `SHA256SUMS` for both the tarball and manifest.
+6. Write `release-manifest.json` with repository, version, exact source commit, community base, mirror tip, package filename and SHA-256. Generate `SHA256SUMS` for both the tarball and manifest. Required fields and canonical forms are specified below in Manifest consumer contract: schemaVersion: 1, canonical repository URL, version, tag, sourceCommit, package and packageSha256.
 7. Create a GitHub Release with `gh release create v<version> --target <exact-main-sha> --latest`, attaching the tarball, manifest and checksums. Never run `npm publish` against the upstream author's package.
 8. Download the published assets afresh, verify `shasum -a 256 -c SHA256SUMS`, and smoke-load the downloaded package. Record the PR, tests and installation limitations in release notes.
 
@@ -49,4 +49,4 @@ Keep the previous release/source available for rollback. Do not unload/downgrade
 
 ## Manifest consumer contract
 
-For new releases, release-manifest.json must include schemaVersion: 1, repository as the canonical https://github.com/owner/repo URL, version, tag, exact sourceCommit and 64-hex packageSha256. The package filename is recorded as package. Do not replace published assets to repair metadata: preserve the original and use a separately named, checksum-bound projection only when the source/package identity is unchanged; label that projection as supplementary, not original. The 2026-10-14 installation closeout records the bounded repair. Monitor tag association is not byte verification or process hot-load proof.
+For new releases, release-manifest.json must include schemaVersion: 1, repository as the canonical https://github.com/owner/repo URL, version, tag, exact sourceCommit and 64-hex packageSha256. The package filename is recorded as package. Do not replace published assets to repair metadata: preserve the original and use a separately named, checksum-bound projection only when the source/package identity is unchanged; label that projection as supplementary, not original. The 2026-10-14 installation closeout records the bounded repair. A maintenance monitor resolving tag association provides neither byte verification nor process hot-load proof.

@@ -62,3 +62,7 @@
 - [x] 6.2 Separate Pi-counted compaction tokens from custom portable observations; report absent/partial counts and price as unknown, with duplicate-entry protection.
 - [x] 6.3 Run provider-free tests against minimum 0.87.1 dev SDK, baseline/patch coverage, strict spec and current Pi1.2 RPC loading; see `docs/compaction-diagnostics.md`.
 - [x] 6.4 Resolve independent review, exact-head CI, regular merge, immutable release/fresh download and side-by-side installation; real-provider/billing/live-TUI/old-session activation remain separate.
+
+### Diagnostics release/installation evidence (2026-10-14)
+
+PR #18, exact-main CI38507900932, Release v0.7.4-fork.2, package SHA and permanent installed byte proof are recorded in `docs/maintenance/2026-10-14-optimization-installed.md`; the same document separates original assets from the downloaded schema1 installation-provenance supplement and old-session/live-provider boundaries.
