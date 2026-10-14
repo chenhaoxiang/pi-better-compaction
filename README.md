@@ -182,10 +182,10 @@ npm run test:pi
 
 The coverage command checks the repository's pinned non-regression baseline. A passing local test suite does not by itself prove a real-provider run, a Git merge, or a published package.
 
-## License
-
-MIT
-
 ## Read-only status and usage
 
 Use `/compaction-status` to inspect checkpoint kind, current-history portable cache, recent returned-attempt reasons and token observations. `/compaction-status usage` reports only tokens. Compaction-entry usage is already counted by Pi; lazy portable calls are shown separately, not added to `/session`. Missing usage and cost remain unknown. These commands neither call models nor certify endpoint/switch safety. See [diagnostics contract](docs/compaction-diagnostics.md).
+
+## License
+
+MIT

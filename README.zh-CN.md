@@ -183,10 +183,10 @@ npm run test:coverage  # 对照冻结基线防倒退，不声称达到 100%
 
 CI 还要求 PR 中新增的、已进入覆盖率统计的运行时代码行全部被测试命中。[覆盖率基线](test/coverage-baseline.json)取自 fork 主分支 `481b30e`：2612/3306 行、224/250 个函数；Bun 当时没有报告分支覆盖率，因此**不**将分支覆盖率算作通过。严格 TypeScript 检查在该基线上已有 21 个错误，本 CI 不假称其全绿。所有测试都不会向真实模型发送消息。
 
-## 许可证
-
-MIT
-
 ## 只读查看压缩状态与用量
 
 `/compaction-status` 显示 checkpoint 类型、当前历史是否已有可移植摘要缓存、最近返回的尝试结果和 token 记录；`/compaction-status usage` 只看用量。Pi 已统计的压缩条目与尚未进入 `/session` 的按需摘要分别展示，不重复相加。缺失用量和价格显示未知，不把零报价当成免费。命令不调用模型或鉴权，也不代替实际请求时的安全核验。见[诊断合同](docs/compaction-diagnostics.md)。
+
+## 许可证
+
+MIT
