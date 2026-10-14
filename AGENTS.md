@@ -10,6 +10,8 @@ This repository is a Pi extension. Keep compaction behavior, provider transport,
 
 ## Documentation map
 
+- `docs/maintenance/2026-10-14-optimization-installed.md`: 0.7.4-fork.2 exact-source normal merge, CI, fresh-download checksums, installed bytes, combined loader and rollback/activation boundaries.
+
 - `docs/compaction-diagnostics.md`: branch-bound checkpoint/portable state, bounded returned-attempt reasons and separate partial provider-token accounting; commands send no requests.
 
 - `docs/maintenance/2026-10-10-community-0.7.4.md`: community 0.7.4 integration, retained fork continuity/accounting, reviewed source/CI and verified immutable release/installed acceptance.
