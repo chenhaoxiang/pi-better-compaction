@@ -12,7 +12,7 @@
 
 ## 发布版本与分支约定
 
-当前维护版本为 **0.7.4-fork.1**，基于社区 **0.7.4**。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
+当前维护版本为 **0.7.4-fork.2**，基于社区 **0.7.4**。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
 
 - `main`：我们的维护、整合与发布主线，保留 fork 修复。
 - `upstream-main`：仅镜像社区 `main`，不加入 fork 提交，也不作为安装来源。
@@ -21,7 +21,7 @@
 固定版本安装：
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.1
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.2
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) 提供可安装的包、来源清单和 `SHA256SUMS` 校验文件；这不是向上游作者的 npm 命名空间发布。发布及制品安装流程见[维护说明](docs/releasing.md)。
@@ -186,3 +186,7 @@ CI 还要求 PR 中新增的、已进入覆盖率统计的运行时代码行全�
 ## 许可证
 
 MIT
+
+## 只读查看压缩状态与用量
+
+`/compaction-status` 显示 checkpoint 类型、当前历史是否已有可移植摘要缓存、最近返回的尝试结果和 token 记录；`/compaction-status usage` 只看用量。Pi 已统计的压缩条目与尚未进入 `/session` 的按需摘要分别展示，不重复相加。缺失用量和价格显示未知，不把零报价当成免费。命令不调用模型或鉴权，也不代替实际请求时的安全核验。见[诊断合同](docs/compaction-diagnostics.md)。
