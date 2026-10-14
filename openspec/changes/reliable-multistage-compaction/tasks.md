@@ -60,5 +60,5 @@
 
 - [x] 6.1 Preserve baseline behavior and expose active-branch checkpoint/cache state and bounded returned-attempt reasons without auth/model calls.
 - [x] 6.2 Separate Pi-counted compaction tokens from custom portable observations; report absent/partial counts and price as unknown, with duplicate-entry protection.
-- [x] 6.3 Run provider-free tests, baseline/patch coverage, strict spec and both pinned/current Pi RPC loading; see `docs/compaction-diagnostics.md`.
-- [ ] 6.4 Resolve independent review, exact-head CI, regular merge, immutable release/fresh download and side-by-side installation; real-provider/billing/live-TUI/old-session activation remain separate.
+- [x] 6.3 Run provider-free tests against minimum 0.87.1 dev SDK, baseline/patch coverage, strict spec and current Pi1.2 RPC loading; see `docs/compaction-diagnostics.md`.
+- [x] 6.4 Resolve independent review, exact-head CI, regular merge, immutable release/fresh download and side-by-side installation; real-provider/billing/live-TUI/old-session activation remain separate.

@@ -46,3 +46,7 @@ Keep the previous release/source available for rollback. Do not unload/downgrade
 ## 中文摘要
 
 `main` 是保留我们修复的维护主线，`upstream-main` 只镜像社区主分支。版本使用社区基线加 `-fork.N`，每次通过测试的版本都发布固定 tag、GitHub Release、可安装包、来源清单和 SHA-256 校验文件。社区镜像领先不代表该新功能已进入本次发布；不能用纯社区树覆盖我们的修复。安装后需重启或 reload，已有会话不会自动切换。
+
+## Manifest consumer contract
+
+For new releases, release-manifest.json must include schemaVersion: 1, repository as the canonical https://github.com/owner/repo URL, version, tag, exact sourceCommit and 64-hex packageSha256. The package filename is recorded as package. Do not replace published assets to repair metadata: preserve the original and use a separately named, checksum-bound projection only when the source/package identity is unchanged; label that projection as supplementary, not original. The 2026-10-14 installation closeout records the bounded repair. Monitor tag association is not byte verification or process hot-load proof.
