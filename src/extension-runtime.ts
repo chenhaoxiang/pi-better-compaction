@@ -21,6 +21,7 @@ import {
 import { executeNativeCompaction } from "./compact-client";
 import { executeV2Compaction } from "./compact-client-v2";
 import { loadExtensionConfig } from "./config";
+import { registerCompactionDiagnostics, type Attempt } from "./diagnostics";
 import { getTextCompactionCandidates } from "./model-candidates";
 import { redactValue, writeDebugArtifact } from "./debug";
 import { findLatestCompactionEntry, isPersistedNativeCompactionEntry, resolveLatestNativeCompactionEntry } from "./details-store";
@@ -1184,12 +1185,37 @@ export function registerExtensionRuntime(
 	pi: ExtensionAPI,
 	dependencies: ExtensionRuntimeDependencies = DEFAULT_DEPENDENCIES,
 ): void {
+	const attempts: Attempt[] = [];
+	const reasons = new Set(["aborted", "non-2xx", "empty-body", "invalid-json", "malformed-response", "empty-output", "network-error", "stream-parse-error", "provider-failed", "incomplete-response", "no-compaction-output", "multiple-compaction-outputs", "retries-exhausted", "no-model-configured", "invalid-model-spec", "model-not-found", "same-as-current-model", "auth-failed", "empty-summary", "compact-failed", "all-models-failed", "request-failed", "invalid-response"]);
+	const capture = (method: string, result: { ok: boolean; reason?: string }) => {
+		attempts.push({ method, outcome: result.ok ? "response-ok" : "failed", ...(!result.ok ? { reason: reasons.has(result.reason ?? "") ? result.reason : "unclassified" } : {}) });
+		if (attempts.length > 12) attempts.shift();
+	};
+	const original = dependencies;
+	dependencies = {
+		...original,
+		executeNativeCompaction: async (...args) => { const result = await original.executeNativeCompaction(...args); capture("Responses v1", result); return result; },
+		executeV2Compaction: async (...args) => { const result = await original.executeV2Compaction(...args); capture("Responses v2", result); return result; },
+		executeAnthropicCompaction: async (...args) => { const result = await original.executeAnthropicCompaction(...args); capture("Anthropic", result); return result; },
+		runNativeFallbackCompaction: async (...args) => { const result = await original.runNativeFallbackCompaction(...args); capture("Text fallback", result); return result; },
+		summarizePortableHistory: async (...args) => { const result = await original.summarizePortableHistory(...args); capture("Portable summary", result); return result; },
+	};
+	registerCompactionDiagnostics(pi, {
+		attempts: () => attempts,
+		portableState: branch => {
+			const checkpoint = latestOpaqueCheckpoint(branch);
+			if (latestOpaqueMarker(branch) && !checkpoint) return "invalid-checkpoint";
+			if (!checkpoint) return "not-required-for-text";
+			return hasCurrentPortableSummary(branch, checkpoint) ? "cached-for-current-history" : "preparation-required-on-incompatible-request";
+		},
+	});
 	const state: RuntimeState = {
 		getThinkingLevel: () => pi.getThinkingLevel?.(),
 		appendEntry: (customType, data) => pi.appendEntry?.(customType, data),
 	};
 
 	pi.on("session_start", (_event, ctx) => {
+		attempts.length = 0;
 		const { config, source, warnings } = dependencies.loadExtensionConfig();
 		if (!config.enabled) return;
 
@@ -1219,6 +1245,7 @@ export function registerExtensionRuntime(
 		}
 	});
 
+	pi.on("session_tree", () => { attempts.length = 0; });
 	pi.on("session_before_compact", async (event, ctx) => {
 		try { return await handleSessionBeforeCompact(event, ctx, dependencies, state); }
 		catch (error) {

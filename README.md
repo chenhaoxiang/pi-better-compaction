@@ -27,7 +27,7 @@ Fork-specific improvements include:
 
 ## Releases and branch policy
 
-The maintained release is **0.7.4-fork.1**, based on community **0.7.4**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+The maintained release is **0.7.4-fork.2**, based on community **0.7.4**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -36,7 +36,7 @@ The maintained release is **0.7.4-fork.1**, based on community **0.7.4**. Fork r
 Install a reproducible release:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.1
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.2
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
@@ -181,6 +181,10 @@ npm run test:pi
 ```
 
 The coverage command checks the repository's pinned non-regression baseline. A passing local test suite does not by itself prove a real-provider run, a Git merge, or a published package.
+
+## Read-only status and usage
+
+Use `/compaction-status` to inspect checkpoint kind, current-history portable cache, recent returned-attempt reasons and token observations. `/compaction-status usage` reports only tokens. Compaction-entry usage is already counted by Pi; lazy portable calls are shown separately, not added to `/session`. Missing usage and cost remain unknown. These commands neither call models nor certify endpoint/switch safety. See [diagnostics contract](docs/compaction-diagnostics.md).
 
 ## License
 

@@ -55,3 +55,10 @@
 - Local OpenSpec strict validation, 195 provider-free tests, coverage gate (15/15 instrumented added runtime lines, two type-only lines not instrumented), offline Pi help-load, pack dry-run, and diff check passed. GitHub PR CI run [36191098823](https://github.com/chenhaoxiang/pi-better-compaction/actions/runs/36191098823) and merged-main push run [36191228392](https://github.com/chenhaoxiang/pi-better-compaction/actions/runs/36191228392) both passed the same 195 tests and coverage checks.
 - Global Pi lists exactly one compaction package, pinned to this fork merge SHA; the installed cache has that HEAD and an isolated synthetic-model RPC `get_state` load passed. Fork canonical local `main` was synchronized ff-only and matches remote main. The prior known-good `481b30ed78b0a44454faafcd3db5e40b558f3424` remains the rollback commit; this is not a claim that a real-provider `/compact` was executed or that existing Pi processes have reloaded.
 - Bun 1.4.2 reported no branch coverage metric, so branches are not a green gate. Strict TypeScript still had 21 baseline errors and is not a passing CI check. On-demand portable-summary usage is audit evidence but does not appear in Pi `/session` totals through the current extension API.
+
+## 6. Follow-up: read-only diagnostics (2026-10-14)
+
+- [x] 6.1 Preserve baseline behavior and expose active-branch checkpoint/cache state and bounded returned-attempt reasons without auth/model calls.
+- [x] 6.2 Separate Pi-counted compaction tokens from custom portable observations; report absent/partial counts and price as unknown, with duplicate-entry protection.
+- [x] 6.3 Run provider-free tests, baseline/patch coverage, strict spec and both pinned/current Pi RPC loading; see `docs/compaction-diagnostics.md`.
+- [ ] 6.4 Resolve independent review, exact-head CI, regular merge, immutable release/fresh download and side-by-side installation; real-provider/billing/live-TUI/old-session activation remain separate.

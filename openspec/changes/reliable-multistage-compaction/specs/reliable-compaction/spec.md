@@ -125,3 +125,14 @@ The extension SHALL support owner-approved Anthropic on-demand compaction withou
 #### Scenario: Block rejected or usage absent
 - **WHEN** a replayed block is rejected with HTTP 400 or compaction usage is absent/invalid
 - **THEN** the signature is retired without deleting the readable summary, and no token/cost values are fabricated.
+
+### Requirement: Read-only checkpoint and usage visibility
+The extension SHALL expose a read-only command using only the active branch and bounded in-process attempt metadata. It SHALL separate Pi-counted compaction usage from later portable-summary observations, preserve missing counts/cost as unknown and SHALL NOT generate summaries, resolve authentication, issue model requests or certify endpoint/switch safety.
+
+#### Scenario: Inspect an opaque checkpoint
+- **WHEN** a user inspects status after compaction or reload
+- **THEN** checkpoint and digest-matching portable-cache state are shown without raw summaries/blobs/URLs, and absent runtime attempts are explicitly unknown.
+
+#### Scenario: Usage includes unsuccessful portable work
+- **WHEN** branch custom entries retain reported usage from a failed portable attempt
+- **THEN** those observations remain visible separately from Pi-counted compaction entries; missing or malformed observations never become fabricated zero bills.
