@@ -27,7 +27,7 @@ Fork-specific improvements include:
 
 ## Releases and branch policy
 
-The maintained release is **0.7.4-fork.2**, based on community **0.7.4**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+The maintained release is **0.7.4-fork.3**, based on community **0.7.4**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -36,7 +36,7 @@ The maintained release is **0.7.4-fork.2**, based on community **0.7.4**. Fork r
 Install a reproducible release:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.2
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.3
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
