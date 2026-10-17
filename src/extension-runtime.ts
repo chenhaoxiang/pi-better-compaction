@@ -26,7 +26,7 @@ import { getTextCompactionCandidates } from "./model-candidates";
 import { redactValue, writeDebugArtifact } from "./debug";
 import { findLatestCompactionEntry, isPersistedNativeCompactionEntry, resolveLatestNativeCompactionEntry } from "./details-store";
 import { runNativeFallbackCompaction } from "./native-fallback";
-import { reconstructPendingPortableHistory, reconstructPortableHistory } from "./portable-history";
+import { collectNativeRetentionMessages, reconstructPendingPortableHistory, reconstructPortableHistory } from "./portable-history";
 import { summarizePortableHistory, type PortableSummaryProgress } from "./portable-summary";
 import {
 	rewriteResponsesPayloadWithNativeReplay,
@@ -40,7 +40,7 @@ import {
 	resolveNativeCompactionEnvironment,
 	type NativeCompactionRuntime,
 } from "./runtime";
-import { serializeMessagesToCompactRequest, type NativeCompactionRequestBody, type ResponsesInputItem } from "./serializer";
+import { serializeMessagesToCompactRequest, serializeMessagesToResponsesInput, type NativeCompactionRequestBody, type ResponsesInputItem } from "./serializer";
 import { mapAnthropicCompactionUsage, mapResponsesCompactionUsage } from "./usage";
 import {
 	ANTHROPIC_COMPACTION_STRATEGY,
@@ -449,8 +449,12 @@ async function runResponsesV2Compact(
 		return v2Result.reason === "aborted" ? { outcome: "aborted" } : { outcome: "failed" };
 	}
 
-	// Build compacted window: retained messages + compaction blob.
-	const retainedMessages = buildRetainedMessages(request.input);
+	// Keep provenance before Pi turns custom notices into provider-role user items.
+	// The full request above (including every notice) has already been summarized.
+	const anchors = branchEntries.length
+		? collectNativeRetentionMessages(branchEntries)
+		: ctx.sessionManager.buildSessionContext().messages.filter(message => message.role === "user" || message.role === "system");
+	const retainedMessages = buildRetainedMessages(serializeMessagesToResponsesInput(runtime.currentModel, anchors, { retainSystemMessages: true }));
 	const compactedWindow = [...retainedMessages, v2Result.compactionItem];
 
 	let details: NativeCompactionDetails;

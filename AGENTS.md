@@ -10,6 +10,10 @@ This repository is a Pi extension. Keep compaction behavior, provider transport,
 
 ## Documentation map
 
+- `openspec/changes/notification-wake-convergence/`: cross-component notification provenance/retention acceptance; owner fixes and exact delivery evidence remain in their respective repositories.
+
+- `docs/maintenance/2026-10-18-notification-retention-convergence.md`: native compaction retains human/system anchors from raw session provenance while custom machine notices remain in the encrypted request history; provider-free regression evidence.
+
 - `docs/maintenance/2026-10-14-optimization-installed.md`: 0.7.4-fork.2 exact-source normal merge, CI, fresh-download checksums, installed bytes, combined loader and rollback/activation boundaries.
 
 - `docs/compaction-diagnostics.md`: branch-bound checkpoint/portable state, bounded returned-attempt reasons and separate partial provider-token accounting; commands send no requests.

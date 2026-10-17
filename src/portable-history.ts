@@ -47,6 +47,27 @@ export function reconstructPortableHistory(
 	return { ok: true, messages, sourceDigest: hash.digest("hex") };
 }
 
+/**
+ * Explicit retention anchors for native V2 compaction. Pi projects custom extension
+ * messages to the provider user role, so a serialized role is not human provenance.
+ * Reproject the active raw branch without opaque boundaries (including context
+ * edits), then retain only actual user/system messages. All custom notices still
+ * reach the compaction request and its encrypted blob; this only selects the
+ * additional plaintext anchors. Never edit persisted checkpoints or history.
+ */
+export function collectNativeRetentionMessages(branch: readonly SessionEntry[]): AgentMessage[] {
+	const expanded: SessionEntry[] = [];
+	let parentId: string | null = null;
+	for (const entry of branch) {
+		if (isNativeCompactionEntry(entry)) continue;
+		expanded.push({ ...entry, parentId } as SessionEntry);
+		parentId = entry.id;
+	}
+	return buildSessionProjection(expanded, parentId).entries
+		.flatMap(entry => entry.messages)
+		.filter(message => message.role === "user" || message.role === "system");
+}
+
 /** Preview the next text-compaction boundary without persisting a new checkpoint. */
 export function reconstructPendingPortableHistory(
 	branch: readonly SessionEntry[],

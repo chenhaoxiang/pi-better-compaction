@@ -27,7 +27,7 @@ Fork-specific improvements include:
 
 ## Releases and branch policy
 
-The maintained release is **0.7.4-fork.2**, based on community **0.7.4**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+The source candidate is **0.7.4-fork.3**; the latest verified published release before this change is **0.7.4-fork.2**, based on community **0.7.4**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
