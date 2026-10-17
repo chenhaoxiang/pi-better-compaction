@@ -20,7 +20,7 @@ The full native compaction request is unchanged and includes machine notices, to
 - Human text beginning with `**From ...**` remains retained because source role, not wording, is authoritative.
 - 500 synthetic custom status notices cannot evict an earlier human acceptance/stop criterion from a 100-token plaintext budget.
 - Opaque checkpoints and raw session history remain byte-identical after anchor selection.
-- Provider-free full suite: 285 passed, zero failed; coverage collection and frozen baseline gate pass. Isolated Pi RPC loader smoke passes 1/1 without a model request. Exact package/release/installed acceptance remains separate.
+- Provider-free initial suite: 285 passed. Review found that retained system anchors were dropped by the ordinary serializer; the dedicated retention option and hook-path regression now preserve system/human anchors while the full request still contains custom notices. The real Pi role converter is used by the test harness. Revised suite: 286 passed, zero failed; coverage collection and frozen baseline gate pass. Initial fork.2 loader logs are historical, not fork.3 package evidence. Exact fork.3 package/release/installed acceptance remains separate.
 
 ## Operational boundary
 

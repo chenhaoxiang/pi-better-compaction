@@ -22,7 +22,7 @@ Applies only to chenhaoxiang/pi-better-compaction. The community project remains
 
 ## Retained community baseline
 
-The current maintained version is **0.7.4-fork.2**; its bounded feature changes and validation contract are in [the feature guide](compaction-diagnostics.md). The previous release facts below describe the retained community base, not the new feature's installed acceptance.
+The latest published maintained version is **0.7.4-fork.2**. The current source candidate is **0.7.4-fork.3** and is not a release or installed-acceptance claim until its exact-head review, package checksums and fresh install are complete. Its bounded feature contract is in [the feature guide](compaction-diagnostics.md). The previous release facts below describe the retained community base, not the new candidate's installed acceptance.
 
 Version **0.7.4-fork.1** integrates community main `724f91cd10795d005f0f00e0c399f94f9d03ad93`, retaining Anthropic on-demand signed-block compaction and the fork's opaque-checkpoint, lazy portability, fallback and serializer fixes. It adds the exact gateway conflict retry and fork-correct checkpoint-switch advice; see [upgrade evidence](maintenance/2026-10-10-community-0.7.4.md). The merge’s API-specific early return was corrected so Anthropic cannot bypass the OpenAI opaque-history guard. Provider-reported Anthropic usage is mapped without fabricating missing counts. The previous installed cache and its untracked lockfile are preserved; fixed release installation uses a separate permanent directory.
 

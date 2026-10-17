@@ -454,7 +454,7 @@ async function runResponsesV2Compact(
 	const anchors = branchEntries.length
 		? collectNativeRetentionMessages(branchEntries)
 		: ctx.sessionManager.buildSessionContext().messages.filter(message => message.role === "user" || message.role === "system");
-	const retainedMessages = buildRetainedMessages(serializeMessagesToResponsesInput(runtime.currentModel, anchors));
+	const retainedMessages = buildRetainedMessages(serializeMessagesToResponsesInput(runtime.currentModel, anchors, { retainSystemMessages: true }));
 	const compactedWindow = [...retainedMessages, v2Result.compactionItem];
 
 	let details: NativeCompactionDetails;

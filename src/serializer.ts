@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { compact, convertToLlm } from "@earendil-works/pi-coding-agent";
+import { renderSystemMessageUpdate } from "@earendil-works/pi-ai";
 import type {
 	Api,
 	AssistantMessage,
@@ -110,6 +111,8 @@ export type NativeCompactionRequestBody = {
 export type SerializeResponsesMessagesOptions = {
 	instructions?: string;
 	includeInstructionsInInput?: boolean;
+	/** Only plaintext retention anchors opt in; normal request parity stays unchanged. */
+	retainSystemMessages?: boolean;
 };
 
 export type ResponsesParityReport = {
@@ -176,6 +179,14 @@ export function serializeMessagesToResponsesInput<TApi extends Api>(
 
 	let messageIndex = 0;
 	for (const message of transformedMessages) {
+		if (message.role === "system" && options.retainSystemMessages) {
+			const text = renderSystemMessageUpdate(message);
+			if (text.trim()) input.push({
+				role: model.reasoning ? "developer" : "system",
+				content: [{ type: "input_text", text: sanitizeSurrogates(text) }],
+			});
+			continue;
+		}
 		if (message.role === "user") {
 			const item = serializeUserMessage(message, model);
 			if (item) {

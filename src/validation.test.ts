@@ -1127,6 +1127,22 @@ test("responses compact stores the extracted assistant summary text as the entry
 
 // ── V2 decision path tests ────────────────────────────────────────────
 
+test("V2 final window retains source system/human anchors without duplicating custom notices", async () => {
+	const h = await loadHookHarness({ v2CompactResult: { ok: true, compactionItem: { type: "compaction", encrypted_content: "opaque-complete-history" }, responseId: "retention-system", createdAt: nextTimestamp() } });
+	const system = { type: "message", id: "source-system", timestamp: nextTimestamp(), message: { role: "system", content: "Owner system anchor must survive.", timestamp: 1 } };
+	const user = createUserEntry("source-human", "Human acceptance criterion.");
+	const custom = { type: "custom_message", id: "source-machine", parentId: user.id, timestamp: nextTimestamp(), customType: "intercom_message", content: "Machine notice only in full history", display: true };
+	const ctx = createContext({ branchEntries: [system, user] as never, sessionContextMessages: [system.message, toReplayMessage(user), { role: "custom", customType: "intercom_message", content: custom.content, timestamp: 3 }] });
+	const result = await h.sessionBeforeCompact({ signal: new AbortController().signal, preparation: { tokensBefore: 1000, firstKeptEntryId: user.id, messagesToSummarize: [], turnPrefixMessages: [] } }, ctx) as any;
+	const window = JSON.stringify(result.compaction.details.compactedWindow);
+	expect(window).toContain("Owner system anchor must survive");
+	expect(window).toContain("Human acceptance criterion");
+	expect(window).not.toContain("Machine notice only in full history");
+	expect(window).toContain("opaque-complete-history");
+	expect(JSON.stringify(h.v2CompactCalls[0])).toContain("Machine notice only in full history");
+	expect(JSON.stringify(h.v2CompactCalls[0])).not.toContain("Owner system anchor must survive");
+});
+
 test("V2 compaction success returns compactedWindow with retained messages + blob", async () => {
 	const { sessionBeforeCompact, v2CompactCalls, compactCalls } = await loadHookHarness({
 		v2CompactResult: {
