@@ -7,10 +7,10 @@ Preserve useful conversation history across native and portable compaction while
 ## ADDED Requirements
 
 ### Requirement: Supported Pi version
-The extension SHALL require Pi coding-agent 0.87.1 or newer for its public session-projection and cache-warming hooks rather than silently pretending the on-demand continuity feature works on older runtimes.
+The extension SHALL require Pi coding-agent 1.3.0-fork.1 or newer for the maintained SDK baseline, public session-projection and cache-warming hooks, and current cross-model reasoning semantics rather than silently pretending the on-demand continuity feature works on older runtimes.
 
 #### Scenario: Unsupported older Pi
-- **WHEN** the package is installed into a Pi runtime older than 0.87.1
+- **WHEN** the package is installed into a Pi runtime older than 1.3.0-fork.1
 - **THEN** its published peer-dependency and documentation requirements identify that runtime as unsupported.
 
 ### Requirement: Native-first ordered compression

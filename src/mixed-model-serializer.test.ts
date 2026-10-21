@@ -5,7 +5,7 @@ import { rewriteResponsesPayloadWithNativeReplay } from "./payload-rewrite";
 import { serializeMessagesToCompactRequest, serializeMessagesToResponsesInput } from "./serializer";
 import { createNativeCompactionDetails, NATIVE_COMPACTION_FALLBACK_SUMMARY } from "./types";
 
-// Match the provider set used by Pi 0.87.1's openai-responses adapter. The
+// Match the provider set used by the pinned Pi 1.3 openai-responses adapter. The
 // converter is a test oracle only; production must not import its internals.
 const toolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
 const target = {
