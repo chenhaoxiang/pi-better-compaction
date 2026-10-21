@@ -103,16 +103,26 @@ test("same-provider model changes normalize tool IDs but never reuse foreign rea
 	expect(actual).toEqual(expected);
 });
 
-test("foreign visible thinking is converted to text, while same-model signed reasoning survives", () => {
-	const visible = { ...kimi, content: [
-		{ type: "thinking", thinking: "visible synthetic thought", thinkingSignature: JSON.stringify({
-			type: "reasoning", id: "rs_foreign", status: "completed", encrypted_content: "synthetic",
-		}) },
-		{ type: "text", text: "answer" },
-	] };
-	const native = { ...visible, provider: target.provider, model: target.id };
-	for (const messages of [[visible], [native]]) {
-		expect(serializeMessagesToResponsesInput(target as never, messages as never)).toEqual(piInput(messages));
+test("Pi 1.3 drops foreign thinking while retaining visible answers and same-model signed reasoning", () => {
+	const signed = { type: "thinking", thinking: "visible synthetic thought", thinkingSignature: JSON.stringify({
+		type: "reasoning", id: "rs_native", status: "completed", encrypted_content: "synthetic",
+	}) };
+	for (const thinking of [signed, { type: "thinking", thinking: signed.thinking }, { ...signed, redacted: true }]) {
+		const foreign = { ...kimi, content: [thinking, { type: "text", text: "answer" }] };
+		const actual = serializeMessagesToResponsesInput(target as never, [foreign] as never);
+		expect(actual).toEqual(piInput([foreign]));
+		expect(actual).toHaveLength(1);
+		expect(JSON.stringify(actual)).toContain("answer");
+		expect(JSON.stringify(actual)).not.toContain(signed.thinking);
+		expect(actual.some((item) => item.type === "reasoning")).toBe(false);
+	}
+	const native = { ...kimi, provider: target.provider, model: target.id, content: [signed, { type: "text", text: "answer" }] };
+	const actual = serializeMessagesToResponsesInput(target as never, [native] as never);
+	expect(actual).toEqual(piInput([native]));
+	expect(actual).toContainEqual(JSON.parse(signed.thinkingSignature));
+	for (const thinking of ["visible unsigned thought", "  "]) {
+		const unsigned = { ...native, content: [{ type: "thinking", thinking }, { type: "text", text: "answer" }] };
+		expect(serializeMessagesToResponsesInput(target as never, [unsigned] as never)).toEqual(piInput([unsigned]));
 	}
 });
 

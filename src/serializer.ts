@@ -30,7 +30,7 @@ type CompactionPreparation = Parameters<typeof compact>[0];
  * essential: foreign reasoning signatures cannot be replayed to the native
  * compaction endpoint, and foreign text/tool IDs must match the actual provider
  * payload when the opaque checkpoint is rewritten. Provider-free parity tests
- * compare these rules with Pi 0.87.1's converter.
+ * compare these rules with the pinned Pi 1.3 maintenance SDK's converter.
  */
 export const COMPACTION_SERIALIZER_STRATEGY = "local-same-model-responses-serializer" as const;
 
@@ -318,10 +318,10 @@ function transformMessagesForResponses<TApi extends Api>(messages: Message[], mo
 			const isSameModel = message.provider === model.provider && message.api === model.api && message.model === model.id;
 			const content = (message.content ?? []).flatMap((block) => {
 				if (block.type === "thinking") {
-					if (block.redacted) return isSameModel ? [block] : [];
-					if (isSameModel && block.thinkingSignature) return [block];
-					if (!block.thinking?.trim()) return [];
-					return isSameModel ? [block] : [{ type: "text" as const, text: block.thinking }];
+					// Pi 1.3 drops foreign reasoning instead of turning it into a visible reply.
+					if (!isSameModel) return [];
+					if (block.redacted || block.thinkingSignature) return [block];
+					return block.thinking?.trim() ? [block] : [];
 				}
 				if (block.type === "text") return isSameModel ? [block] : [{ type: "text" as const, text: block.text }];
 				if (block.type === "toolCall" && !isSameModel) {
@@ -600,7 +600,7 @@ function parseTextSignature(signature: string | undefined): ParsedTextSignature 
 	}
 }
 
-// Matches Pi-AI 0.87.1's deterministic shortHash for oversized or foreign IDs.
+// Matches the pinned Pi-AI converter's deterministic shortHash for oversized or foreign IDs.
 function shortHash(value: string): string {
 	let h1 = 0xdeadbeef;
 	let h2 = 0x41c6ce57;
