@@ -69,7 +69,7 @@ An existing OpenAI opaque checkpoint is **never** summarized as a placeholder by
 
 ## Requirements
 
-- Pi with `@earendil-works/pi-coding-agent` **0.87.1 or newer**;
+- Pi with `@earendil-works/pi-coding-agent` **1.3.0-fork.1 or newer**, using the pinned 1.3 maintenance SDK for development;
 - a Node runtime supported by the installed Pi;
 - no provider credential or network probe is required during extension startup.
 

@@ -10,6 +10,8 @@ This repository is a Pi extension. Keep compaction behavior, provider transport,
 
 ## Documentation map
 
+- `docs/maintenance/2026-10-21-sdk-baseline.md`: exact Pi 1.3 maintenance SDK/lock, host-owned runtime peers, provider-free regressions and source-only delivery boundaries.
+
 - `openspec/changes/notification-wake-convergence/`: cross-component notification provenance/retention acceptance; owner fixes and exact delivery evidence remain in their respective repositories.
 
 - `docs/maintenance/2026-10-18-notification-retention-convergence.md`: native compaction retains human/system anchors from raw session provenance while custom machine notices remain in the encrypted request history; provider-free regression evidence.

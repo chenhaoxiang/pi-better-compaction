@@ -57,6 +57,7 @@
     "README.md",
     "README.zh-CN.md",
     "docs/releasing.md",
+    "docs/maintenance/2026-10-21-sdk-baseline.md",
     "docs/compaction-diagnostics.md",
     "docs/maintenance/2026-10-10-community-0.7.4.md",
     "LICENSE"
@@ -69,11 +70,19 @@
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": ">=0.87.1"
+    "@earendil-works/pi-coding-agent": ">=1.3.0-fork.1"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "0.87.1",
-    "@earendil-works/pi-ai": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1"
+    "@earendil-works/pi-agent-core": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-agent-core-1.3.0-fork.1.tgz",
+    "@earendil-works/pi-ai": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-ai-1.3.0-fork.1.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-coding-agent-1.3.0-fork.1.tgz"
+  },
+  "overrides": {
+    "@earendil-works/pi-agent-core": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-agent-core-1.3.0-fork.1.tgz",
+    "@earendil-works/pi-ai": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-ai-1.3.0-fork.1.tgz",
+    "@earendil-works/pi-codemode": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-codemode-1.3.0-fork.1.tgz",
+    "@earendil-works/pi-mcp": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-mcp-1.3.0-fork.1.tgz",
+    "@earendil-works/pi-telemetry": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-telemetry-1.3.0-fork.1.tgz",
+    "@earendil-works/pi-tui": "https://github.com/chenhaoxiang/pi/releases/download/v1.3.0-fork.1/earendil-works-pi-tui-1.3.0-fork.1.tgz"
   }
 }

@@ -47,7 +47,7 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@main
 
 ## 要求
 
-- **Pi** ≥ 0.87.1（`@earendil-works/pi-coding-agent >= 0.87.1`）。旧版 0.84.3 没有按需恢复历史所需的公开会话投影接口。
+- **Pi** ≥ 1.3.0-fork.1（`@earendil-works/pi-coding-agent >= 1.3.0-fork.1`）。开发与回归固定使用 1.3 维护版 SDK，历史旧版本不在本次支持范围内。
 
 ## 配置
 

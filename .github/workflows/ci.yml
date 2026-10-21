@@ -23,7 +23,7 @@ jobs:
         with:
           bun-version: '1.4.2'
       - name: Install test dependencies without lifecycle scripts
-        run: npm install --ignore-scripts --package-lock=false --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Provider-free test suite
         run: npm test
       - name: Coverage against pinned baseline
