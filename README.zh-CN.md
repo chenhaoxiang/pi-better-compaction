@@ -12,7 +12,7 @@
 
 ## 发布版本与分支约定
 
-本变更源码候选版本为 **0.7.4-fork.3**；变更前最近已核验的已发布维护版本为 **0.7.4-fork.2**，基于社区 **0.7.4**。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
+本变更源码候选版本为 **0.7.4-fork.4**；变更前最近已核验的已发布维护版本为 **0.7.4-fork.3**，基于社区 **0.7.4**。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
 
 - `main`：我们的维护、整合与发布主线，保留 fork 修复。
 - `upstream-main`：仅镜像社区 `main`，不加入 fork 提交，也不作为安装来源。
@@ -21,7 +21,7 @@
 固定版本安装：
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.2
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) 提供可安装的包、来源清单和 `SHA256SUMS` 校验文件；这不是向上游作者的 npm 命名空间发布。发布及制品安装流程见[维护说明](docs/releasing.md)。
@@ -29,8 +29,8 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.2
 ## 安装
 
 ```bash
-# 安装本 fork；需要固定行为时把 main 换成审核过的提交 SHA。
-pi install git:github.com/chenhaoxiang/pi-better-compaction@main
+# 核对同版本 Release 后安装固定维护版。
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
 ```
 
 上游 npm 包 `@lll9p/pi-better-compaction` 是独立发布版本，不一定包含本 fork 的修复。安装后执行 `/reload` 生效。

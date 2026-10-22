@@ -10,6 +10,8 @@ This repository is a Pi extension. Keep compaction behavior, provider transport,
 
 ## Documentation map
 
+- `docs/maintenance/2026-10-22-pi14-release.md`: release the already-reviewed Pi 1.3+ serializer parity repair as immutable fork.4, provider-free coverage and separate Pi 1.4 installed acceptance.
+
 - `docs/maintenance/2026-10-21-sdk-baseline.md`: exact Pi 1.3 maintenance SDK/lock, host-owned runtime peers, provider-free regressions and source-only delivery boundaries.
 
 - `openspec/changes/notification-wake-convergence/`: cross-component notification provenance/retention acceptance; owner fixes and exact delivery evidence remain in their respective repositories.
