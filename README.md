@@ -27,7 +27,7 @@ Fork-specific improvements include:
 
 ## Releases and branch policy
 
-The source candidate is **0.7.4-fork.4**; the latest verified published release before this change is **0.7.4-fork.3**, based on community **0.7.4**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+The current published and installed release is **0.7.4-fork.4**, based on community **0.7.4**; **0.7.4-fork.3** remains the previous immutable rollback release. See [installed acceptance](docs/maintenance/2026-10-22-pi14-release.md). Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -49,7 +49,7 @@ Install the maintained fork rather than the similarly named upstream npm package
 pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
 ```
 
-For reproducible behavior, pin a reviewed commit instead of `main`:
+For reproducible behavior, pin a reviewed commit instead of a moving branch:
 
 ```bash
 pi install git:github.com/chenhaoxiang/pi-better-compaction@<reviewed-commit>
