@@ -27,7 +27,7 @@ Fork-specific improvements include:
 
 ## Releases and branch policy
 
-The current published and installed release is **0.7.4-fork.4**, based on community **0.7.4**; **0.7.4-fork.3** remains the previous immutable rollback release. See [installed acceptance](docs/maintenance/2026-10-22-pi14-release.md). Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+The current published and installed release is **0.7.4-fork.5**, based on community **0.7.4**; **0.7.4-fork.4** remains the previous immutable rollback release. See [release and installed acceptance](docs/maintenance/2026-10-30-replay-parity-fork5.md). Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -36,7 +36,7 @@ The current published and installed release is **0.7.4-fork.4**, based on commun
 Install a reproducible release:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
@@ -46,7 +46,7 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
 Install the maintained fork rather than the similarly named upstream npm package:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
 ```
 
 For reproducible behavior, pin a reviewed commit instead of a moving branch:
@@ -150,7 +150,7 @@ Native compaction still runs first. The `local` provider-name filter is only a s
 
 ## Native replay compatibility
 
-Source candidate: **0.7.4-fork.5**. This section describes the candidate, not an already published or installed upgrade.
+The replay compatibility and bounded diagnostics described below are included in **0.7.4-fork.5**. Existing fork.4 installations and active sessions remain valid rollback/runtime history until explicitly reloaded or replaced.
 
 Pi extensions can annotate machine notices at request time without changing the raw session. Native replay accepts the exact `pi_subagents_notice` provenance envelope for persisted `subagent-*` / `subagent_*` custom messages only when the original body, type, content blocks and item count still match. The original strict path remains available for unannotated messages. Actual tail items are preserved verbatim; kept messages are not duplicated and the persisted checkpoint is not edited. This compatibility check sends no model request.
 

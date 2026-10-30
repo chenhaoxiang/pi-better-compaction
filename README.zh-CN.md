@@ -12,7 +12,7 @@
 
 ## 发布版本与分支约定
 
-当前已发布并安装的维护版本为 **0.7.4-fork.4**，基于社区 **0.7.4**；**0.7.4-fork.3** 保留为不可变回退版本。实际验收见[维护记录](docs/maintenance/2026-10-22-pi14-release.md)。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
+当前已发布并安装的维护版本为 **0.7.4-fork.5**，基于社区 **0.7.4**；**0.7.4-fork.4** 保留为不可变回退版本。实际验收见[维护记录](docs/maintenance/2026-10-30-replay-parity-fork5.md)。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
 
 - `main`：我们的维护、整合与发布主线，保留 fork 修复。
 - `upstream-main`：仅镜像社区 `main`，不加入 fork 提交，也不作为安装来源。
@@ -21,7 +21,7 @@
 固定版本安装：
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) 提供可安装的包、来源清单和 `SHA256SUMS` 校验文件；这不是向上游作者的 npm 命名空间发布。发布及制品安装流程见[维护说明](docs/releasing.md)。
@@ -30,7 +30,7 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
 
 ```bash
 # 核对同版本 Release 后安装固定维护版。
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.4
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
 ```
 
 上游 npm 包 `@lll9p/pi-better-compaction` 是独立发布版本，不一定包含本 fork 的修复。安装后执行 `/reload` 生效。
@@ -154,7 +154,7 @@ pi 触发压缩时（`session_before_compact`）：
 
 ## 原生回放兼容性
 
-本次源码候选版本：**0.7.4-fork.5**。以下描述不代表新版本已经发布、安装或在旧 session 中生效。
+以下原生回放兼容性和有界诊断已包含在 **0.7.4-fork.5**。旧 fork.4 安装和现有 session 仍保留为回退/运行历史，只有明确 reload 或替换后才会加载新代码。
 
 Pi 扩展可能在请求发送前给机器通知增加来源标记，但不修改原始 session。原生回放现在只对持久化的 `subagent-*` / `subagent_*` 自定义消息兼容精确的 `pi_subagents_notice` 来源封套，并要求原始正文、类型、内容块和条目数量都不变；未标记消息仍走原有严格对齐。实际 tail 以 Pi 当前请求中的条目为准，保留的历史不会重复，持久化 checkpoint 不会被改写。该兼容判断不发送模型请求。
 
