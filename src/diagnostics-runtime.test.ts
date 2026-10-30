@@ -19,3 +19,27 @@ test("runtime command computes none/invalid/uncached/cached from the current bra
   await command.handler("",ctx);expect(notices.at(-1)).toContain("cached-for-current-history");expect(notices.at(-1)).not.toContain("private-blob");expect(notices.at(-1)).not.toContain("never display");
   hooks.get("session_tree")();hooks.get("session_start")({},ctx);
 });
+
+test("blocked native replay remains inspectable without enabling payload logs or making a diagnostic request", async () => {
+  const hooks=new Map<string,any>();let command:any;const notices:string[]=[];
+  const branch=[msg("old",null),msg("kept","old"),checkpoint,msg("tail","checkpoint")];
+  let authCalls=0;let aborted=0;
+  registerExtensionRuntime({on:(n:string,f:any)=>hooks.set(n,f),registerCommand:(_n:string,c:any)=>{command=c}} as never,
+    {loadExtensionConfig:()=>({config:DEFAULT_EXTENSION_CONFIG,warnings:[]})} as never);
+  const ctx={hasUI:true,cwd:"/synthetic",signal:new AbortController().signal,
+    model:{provider:"mock",api:"openai-responses",id:"mock",baseUrl:"https://example.invalid/v1",input:["text"],reasoning:false},
+    modelRegistry:{getApiKeyAndHeaders:async()=>{authCalls++;return {ok:true,apiKey:"synthetic"}}},
+    ui:{notify:(m:string)=>notices.push(m)},abort:()=>{aborted++},
+    sessionManager:{getBranch:()=>branch,getSessionId:()=>"synthetic",getSessionFile:()=>undefined}};
+  await hooks.get("before_provider_request")({payload:{model:"mock",input:[{role:"user",content:"private-request-content"}]}},ctx);
+  expect(aborted).toBe(1);
+  const authBeforeStatus=authCalls;
+  await command.handler("",ctx);
+  expect(authCalls).toBe(authBeforeStatus);
+  expect(notices.at(-1)).toContain("Native replay guard: failed (expected-pi-replay-mismatch)");
+  expect(notices.at(-1)).not.toContain("private-request-content");
+  expect(notices.at(-1)).not.toContain("private-blob");
+  hooks.get("session_tree")();
+  await command.handler("",ctx);
+  expect(notices.at(-1)).not.toContain("Native replay guard:");
+});

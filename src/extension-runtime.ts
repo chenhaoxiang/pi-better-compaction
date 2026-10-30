@@ -77,6 +77,8 @@ export type ExtensionRuntimeDependencies = {
 type RuntimeState = {
 	getThinkingLevel?: () => ThinkingLevel | undefined;
 	appendEntry?: (customType: string, data?: unknown) => void;
+	/** Sanitized, bounded observation; never stores request bodies or checkpoint contents. */
+	recordReplayFailure?: (reason: string) => void;
 	/** Compaction entry whose block the in-flight provider request carries. */
 	pendingAnthropicReplay?: string;
 	/** `${compactionEntryId}|${provider}/${model}` pairs already warned about on model_select. */
@@ -1131,6 +1133,7 @@ async function handleBeforeProviderRequest(
 		compactionEntry: latestNativeCompactionEntry,
 	});
 	if (!rewrite.ok) {
+		state.recordReplayFailure?.(rewrite.reason);
 		if (opaqueCheckpoint) {
 			abortOpaqueRequest(ctx, config, `native-rewrite-${rewrite.reason}`);
 			return undefined;
@@ -1190,7 +1193,9 @@ export function registerExtensionRuntime(
 	dependencies: ExtensionRuntimeDependencies = DEFAULT_DEPENDENCIES,
 ): void {
 	const attempts: Attempt[] = [];
-	const reasons = new Set(["aborted", "non-2xx", "empty-body", "invalid-json", "malformed-response", "empty-output", "network-error", "stream-parse-error", "provider-failed", "incomplete-response", "no-compaction-output", "multiple-compaction-outputs", "retries-exhausted", "no-model-configured", "invalid-model-spec", "model-not-found", "same-as-current-model", "auth-failed", "empty-summary", "compact-failed", "all-models-failed", "request-failed", "invalid-response"]);
+	const reasons = new Set(["aborted", "non-2xx", "empty-body", "invalid-json", "malformed-response", "empty-output", "network-error", "stream-parse-error", "provider-failed", "incomplete-response", "no-compaction-output", "multiple-compaction-outputs", "retries-exhausted", "no-model-configured", "invalid-model-spec", "model-not-found", "same-as-current-model", "auth-failed", "empty-summary", "compact-failed", "all-models-failed", "request-failed", "invalid-response",
+		"compaction-boundary-not-found", "first-kept-entry-not-found", "unsupported-instructions", "invalid-compacted-window",
+		"native-history-edited-after-checkpoint", "unexpected-compaction-after-boundary", "expected-pi-replay-mismatch"]);
 	const capture = (method: string, result: { ok: boolean; reason?: string }) => {
 		attempts.push({ method, outcome: result.ok ? "response-ok" : "failed", ...(!result.ok ? { reason: reasons.has(result.reason ?? "") ? result.reason : "unclassified" } : {}) });
 		if (attempts.length > 12) attempts.shift();
@@ -1216,6 +1221,7 @@ export function registerExtensionRuntime(
 	const state: RuntimeState = {
 		getThinkingLevel: () => pi.getThinkingLevel?.(),
 		appendEntry: (customType, data) => pi.appendEntry?.(customType, data),
+		recordReplayFailure: reason => capture("Native replay guard", { ok: false, reason }),
 	};
 
 	pi.on("session_start", (_event, ctx) => {
