@@ -266,6 +266,19 @@ export function alignPrunedInput(actual: readonly unknown[], expected: readonly 
 	return actualIndex === actual.length ? indices : undefined;
 }
 
+/** Exact request-time pi-subagents provenance annotation; never a content wildcard. */
+function withNoticeEnvelope(message: AgentMessage): AgentMessage {
+	if (message.role !== "custom" || !/^subagent[-_][a-zA-Z0-9_-]+$/.test(message.customType) ||
+		(Array.isArray(message.content) && message.content.length === 0)) return message;
+	const open = `<pi_subagents_notice type="${message.customType}" origin="automated message from the pi-subagents extension, not typed by the user">`;
+	return {
+		...message,
+		content: typeof message.content === "string"
+			? `${open}\n${message.content}\n</pi_subagents_notice>`
+			: [{ type: "text", text: `${open}\n` }, ...message.content, { type: "text", text: "\n</pi_subagents_notice>" }],
+	};
+}
+
 function toBranchSummaryMessage(entry: BranchSummaryEntry): AgentMessage {
 	return {
 		role: "branchSummary",
@@ -512,7 +525,27 @@ function buildNativeReplaySegmentsInternal<TApi extends Api>(args: {
 		...freshPreamble.trailingInput,
 	];
 
-	const originalIndices = alignPrunedInput(args.payload.input, originalPiReplayInput);
+	let originalIndices = alignPrunedInput(args.payload.input, originalPiReplayInput);
+	if (!originalIndices) {
+		// A context handler can add provenance to persisted custom notices. Accept
+		// only its exact envelope around the unchanged raw body/type/blocks. Do not
+		// discard arbitrary custom rewrites, omitted messages or human changes.
+		const messages = [compactionSummaryMessage, ...preCompactionKeptMessages, ...postCompactionTailMessages];
+		const enveloped = messages.map(withNoticeEnvelope);
+		if (enveloped.some((message, index) => message !== messages[index])) {
+			const envelopeInput = [
+				...freshPreamble.leadingInput,
+				...serializeMessagesToResponsesInput(args.model, enveloped),
+				...freshPreamble.trailingInput,
+			];
+			if (envelopeInput.length === originalPiReplayInput.length && args.payload.input.length === envelopeInput.length) {
+				const comparableInput = args.payload.input.map((item, index) =>
+					areEquivalentValues(item, envelopeInput[index]) ? originalPiReplayInput[index] : item,
+				);
+				originalIndices = alignPrunedInput(comparableInput, originalPiReplayInput);
+			}
+		}
+	}
 	if (!originalIndices) {
 		const parity = compareResponsesInputParity(args.payload.input, originalPiReplayInput);
 		return {

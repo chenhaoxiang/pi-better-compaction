@@ -69,7 +69,7 @@ export function registerCompactionDiagnostics(pi: ExtensionAPI, options: {
 					lines.push(`Checkpoint: ${checkpointSnapshot(branch)}`, `Portable history: ${options.portableState(branch)}`);
 					for (const attempt of options.attempts()) lines.push(`${attempt.method}: ${attempt.outcome}${attempt.reason ? ` (${attempt.reason})` : ""}`);
 					if (!options.attempts().length) lines.push("No compaction attempts recorded in this runtime.");
-					lines.push("Attempt outcomes describe returned responses, not checkpoint persistence. Switch safety/endpoint identity is revalidated on the actual request, not certified by this command.");
+					lines.push("Response outcomes describe returned responses, not checkpoint persistence. Native replay guard failures are local pre-send rejections, not provider calls. Switch safety/endpoint identity is revalidated on the actual request, not certified by this command.");
 				}
 				const usage = usageSnapshot(branch);
 				const format = (n: number | null) => n === null ? "unknown" : String(n);

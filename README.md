@@ -148,6 +148,14 @@ Native compaction still runs first. The `local` provider-name filter is only a s
 - The extension never writes Pi's `settings.json`, `models.json`, or session history outside its own extension state and debug artifacts.
 - Debug artifacts can contain prompts, tool output, and provider payloads. Store them locally and treat them as sensitive even when redaction is enabled.
 
+## Native replay compatibility
+
+Source candidate: **0.7.4-fork.5**. This section describes the candidate, not an already published or installed upgrade.
+
+Pi extensions can annotate machine notices at request time without changing the raw session. Native replay accepts the exact `pi_subagents_notice` provenance envelope for persisted `subagent-*` / `subagent_*` custom messages only when the original body, type, content blocks and item count still match. The original strict path remains available for unannotated messages. Actual tail items are preserved verbatim; kept messages are not duplicated and the persisted checkpoint is not edited. This compatibility check sends no model request.
+
+This is not a wildcard for custom context changes. Modified bodies or envelope metadata, omissions, human-authored lookalikes and unsafe checkpoint edits still fail closed. Inspect `/compaction-status` after a rejection: `Native replay guard: failed (...)` is a bounded local pre-send observation, not a failed provider call. Reload/tree navigation resets these runtime observations; missing historical diagnostics remain unknown.
+
 ## Debugging
 
 Enable local artifacts, then reload and exercise compaction:
