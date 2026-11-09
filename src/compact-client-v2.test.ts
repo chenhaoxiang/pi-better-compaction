@@ -127,7 +127,7 @@ describe("executeV2Compaction", () => {
 		const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(new DOMException("expired", "TimeoutError")));
 		const fetch = mock(async () => sseResponse([]));
 		globalThis.fetch = fetch as typeof globalThis.fetch;
-		expect(await executeV2Compaction({ runtime: createRuntime(), request: createRequest() })).toEqual({ ok: false, reason: "aborted" });
+		expect(await executeV2Compaction({ runtime: createRuntime(), request: createRequest() })).toMatchObject({ ok: false, reason: "deadline-exceeded" });
 		expect(timeout).toHaveBeenCalledWith(600_000);
 		expect(fetch).not.toHaveBeenCalled();
 	});

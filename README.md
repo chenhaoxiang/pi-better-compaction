@@ -27,7 +27,7 @@ Fork-specific improvements include:
 
 ## Releases and branch policy
 
-The current published and installed release is **0.7.4-fork.5**, based on community **0.7.4**; **0.7.4-fork.4** remains the previous immutable rollback release. See [release and installed acceptance](docs/maintenance/2026-10-30-replay-parity-fork5.md). Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+This source targets **0.7.4-fork.6**, based on community **0.7.4**, with native V2 timeout classification and metadata-only progress diagnostics. The previous verified release/installation is **0.7.4-fork.5** ([acceptance](docs/maintenance/2026-10-30-replay-parity-fork5.md)); preserve it for rollback. Source version, GitHub publication, disk selection and active-session loading are separate facts. Fork releases use `<community-version>-fork.<revision>`.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -36,17 +36,17 @@ The current published and installed release is **0.7.4-fork.5**, based on commun
 Install a reproducible release:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
 ```
 
-[GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
+Verify that the matching Release and checksums exist before installing. [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
 
 ## Install this fork
 
 Install the maintained fork rather than the similarly named upstream npm package:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
 ```
 
 For reproducible behavior, pin a reviewed commit instead of a moving branch:
@@ -87,6 +87,7 @@ The extension does not create this file. With no file, the defaults below apply:
 {
   "enabled": true,
   "compactionVersion": "v2",
+  "nativeV2IdleTimeoutMs": 0,
   "compactionModel": null,
   "additionalCompactionModels": [],
   "localCompactionModels": [],
@@ -106,6 +107,7 @@ The extension does not create this file. With no file, the defaults below apply:
 | --- | --- |
 | `enabled` | Disable new compaction work while retaining the safety guard for an existing opaque checkpoint. |
 | `compactionVersion` | Select the Responses protocol, `v1` or `v2`; `v2` is the default. |
+| `nativeV2IdleTimeoutMs` | Optional V2 inactivity limit, integer 0–600000 ms; default `0` disables it. The existing 600-second operation-wide deadline remains. Do not mistake slow native compaction for a stalled transport. |
 | `compactionModel` | First explicit text fallback and first portable-summary candidate, in `provider/model` form. |
 | `additionalCompactionModels` | Additional text candidates attempted in order. |
 | `localCompactionModels` | Ordered `{ modelId, thinkingLevel }` priorities for registered providers whose name contains `local`. |
@@ -139,6 +141,14 @@ Example local model-ID priorities:
 ```
 
 Native compaction still runs first. The `local` provider-name filter is only a selection convention; it is not proof that a provider is local or trusted.
+
+## Native V2 progress and timeout recovery
+
+Manual and automatic compaction share the same native-first path. V2 status now shows request/headers/streaming/output/completed stages, elapsed and idle seconds, and native attempt number, updating once per second even without response bytes. `deadline-exceeded` and opt-in `idle-timeout` are failures, not user cancellation: they enter the existing safe text/portable fallback. Explicit caller cancellation still stops the chain. The 600-second deadline spans all native attempts; it is not renewed by retries. V1, Anthropic and text-summary transport budgets are unchanged.
+
+An announced or received compaction output without `response.completed` is incomplete: no partial checkpoint is saved and no second native POST is issued. `[DONE]` and `response.incomplete` end the read immediately rather than waiting for HTTP EOF. This does not turn an uncertain billed attempt into a successful checkpoint or guarantee upstream cancellation.
+
+`/compaction-status` shows current transport metadata and at most twelve prior native observations. One context-invisible `pi-better-compaction-native-attempt` entry per returned native operation preserves only closed labels, times, counts and trigger (`manual`/`threshold`/`overflow`) across reload; no prompt, URL, credential, response ID or encrypted blob is recorded. See [diagnostics](docs/compaction-diagnostics.md).
 
 ## Safety boundaries
 

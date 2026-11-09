@@ -78,7 +78,7 @@ The extension SHALL include provider-reported native-compaction usage in the Pi 
 - **THEN** no fabricated token or cost numbers are reported as actual usage.
 
 ### Requirement: Local model-ID priorities and visible compaction method
-A nonempty `localCompactionModels` list SHALL replace the explicit-provider text fallback list without changing native-first behavior. Each entry SHALL match its exact model ID only among models currently registered in Pi whose provider name contains `local`, using its own thinking level; eligible providers for the same model ID SHALL be tried in stable provider-name order before the next model ID. The extension SHALL skip missing models and failed authentication without making a separate model-probe request, and advance on non-abort compaction failure. The provider-name check is not proof of a local or trusted endpoint. A missing/failed candidate SHALL NOT introduce an unlisted external text-fallback provider. Normal compaction before an opaque checkpoint ends with Pi's default text compaction; post-checkpoint portable recovery ends with the active model and aborts on total failure.
+A nonempty `localCompactionModels` list SHALL replace explicit-provider text candidates without changing native-first behavior. Exact registered model IDs under provider names containing `local` SHALL run at their declared thinking levels in model-ID order and stable provider-name order. Missing/auth-failed models SHALL be skipped without probes or unlisted external candidates; non-abort failure advances the chain. Provider names do not establish trust.
 
 #### Scenario: Native success with local priority configured
 - **WHEN** a supported Responses native compaction succeeds
@@ -86,7 +86,7 @@ A nonempty `localCompactionModels` list SHALL replace the explicit-provider text
 
 #### Scenario: Models are missing, unauthenticated, or fail
 - **WHEN** native compaction fails and the first exact-ID candidate is unauthenticated, the next is not registered under a `local`-named provider, and a later candidate succeeds
-- **THEN** only registered, authenticated candidates receive real compaction requests in model-ID order at their declared thinking levels, with no separate network probe; success stops the chain.
+- **THEN** only registered, authenticated candidates receive real compaction requests in model-ID order at their declared thinking levels, with no separate network probe; success stops the chain. Before any opaque checkpoint, exhaustion SHALL offer Pi's default text compaction; after a checkpoint, portable recovery SHALL end with the active model and abort on total failure.
 
 #### Scenario: No candidate safely summarizes an opaque checkpoint
 - **WHEN** an already opaque-compacted session needs portable history and all configured candidates plus the active model fail
@@ -110,6 +110,21 @@ Native compact retries SHALL be limited to failures for which replaying the requ
 #### Scenario: Ambiguous interruption after compaction output
 - **WHEN** an output item has already arrived but the stream ends or throws before `response.completed`
 - **THEN** the extension neither persists the partial blob nor issues an automatic second native request; it proceeds through the configured fallback chain.
+
+### Requirement: Native V2 waiting is bounded and distinguishable from user cancellation
+The existing native V2 deadline SHALL span the complete native operation including retries. Deadline and optional inactivity expiry SHALL be classified separately from explicit caller cancellation and SHALL enter the safe existing fallback chain. Explicit caller cancellation SHALL stop that chain. The extension SHALL settle locally even when the transport does not acknowledge cancellation, without asserting that upstream work/billing was rolled back.
+
+#### Scenario: Silent transport expires
+- **WHEN** native headers or a body read remains pending until the native deadline or configured idle limit
+- **THEN** the operation returns a closed deadline/idle reason, does not renew the total deadline or issue another native POST, and offers the existing complete-history fallback.
+
+#### Scenario: Output is announced before interruption
+- **WHEN** native output has been announced or received but successful completion is missing
+- **THEN** no partial native checkpoint is saved and no second native request is sent. `[DONE]` or `response.incomplete` terminates the read rather than waiting for connection EOF.
+
+#### Scenario: Native transport diagnostics survive reload without leaking history
+- **WHEN** automatic or manual native compaction is pending or returns
+- **THEN** stage and timing/count metadata is visible; returned native operations append only context-invisible closed-label metadata, and status may restore at most twelve observations from the active branch without calls, authentication, raw payloads or billing claims.
 
 ### Requirement: Anthropic native blocks preserve portable history
 The extension SHALL support owner-approved Anthropic on-demand compaction without weakening any existing opaque checkpoint safety boundary. A successful signed block SHALL carry real readable summary text; only the same provider, API, model and base URL may replay the signature.
