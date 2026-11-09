@@ -23,6 +23,19 @@ afterEach(() => {
 	tempDirs = [];
 });
 
+test.each([0, 25, 600_000])("accepts opt-in native V2 idle timeout %d without changing the default", value => {
+	const loaded = loadExtensionConfig(writeTempConfig(JSON.stringify({ nativeV2IdleTimeoutMs: value })));
+	expect(loaded.config.nativeV2IdleTimeoutMs).toBe(value);
+	expect(loaded.warnings).toHaveLength(0);
+	expect(DEFAULT_EXTENSION_CONFIG.nativeV2IdleTimeoutMs).toBe(0);
+});
+
+test.each([-1, 0.5, 600_001, "25", null])("rejects malformed native V2 idle timeout %j", value => {
+	const loaded = loadExtensionConfig(writeTempConfig(JSON.stringify({ nativeV2IdleTimeoutMs: value })));
+	expect(loaded.config.nativeV2IdleTimeoutMs).toBe(0);
+	expect(loaded.warnings.join(" ")).toContain("nativeV2IdleTimeoutMs");
+});
+
 describe("user-authored local model priorities", () => {
 	const preferences = [
 		{ modelId: "gpt-6-sol", thinkingLevel: "max" as const },

@@ -10,8 +10,9 @@
 import { writeDebugArtifact } from "./debug";
 import type { NativeCompactionRuntime } from "./runtime";
 import type { NativeCompactionRequestBody } from "./serializer";
-import { isAbortError, toHeaders } from "./shared-headers";
+import { toHeaders } from "./shared-headers";
 import type { ArtifactContext, ExtensionConfig } from "./types";
+import { V2Transport, type V2CompactionDiagnostics } from "./v2-transport";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -38,6 +39,8 @@ export type V2CompactionSuccess = {
 
 export type V2CompactionFailureReason =
 	| "aborted"
+	| "deadline-exceeded"
+	| "idle-timeout"
 	| "network-error"
 	| "non-2xx"
 	| "provider-failed"
@@ -54,13 +57,19 @@ export type V2CompactionFailure = {
 	errorMessage?: string;
 };
 
-export type V2CompactionResult = V2CompactionSuccess | V2CompactionFailure;
+export type V2CompactionResult = (V2CompactionSuccess | V2CompactionFailure) & { diagnostics?: V2CompactionDiagnostics };
 
 export type ExecuteV2CompactionOptions = {
 	runtime: NativeCompactionRuntime;
 	request: NativeCompactionRequestBody;
 	signal?: AbortSignal;
 	maxRetries?: number;
+	/** Operation-wide deadline, not renewed by retries. Default remains 600 seconds. */
+	timeoutMs?: number;
+	/** Optional inactivity bound; zero/omitted preserves long silent native requests. */
+	idleTimeoutMs?: number;
+	onProgress?: (progress: V2CompactionDiagnostics) => void;
+	trigger?: "manual" | "threshold" | "overflow";
 	settings?: ExtensionConfig;
 	context?: ArtifactContext;
 };
@@ -110,7 +119,13 @@ type StreamCollectionResult =
  * - `response.completed` with `response.id`, `response.usage`, `response.created_at`
  * - `response.failed` / `error` for server-side errors
  */
-async function collectStreamOutput(response: Response, signal?: AbortSignal): Promise<StreamCollectionResult> {
+function interruptionReason(transport: V2Transport, error?: unknown): V2CompactionFailureReason | undefined {
+	const reason = transport.interruption(error);
+	return reason && reason !== "aborted" && transport.outputReceived ? "incomplete-response" : reason;
+}
+
+async function collectStreamOutput(response: Response, transport: V2Transport): Promise<StreamCollectionResult> {
+	const { signal } = transport;
 	const body = response.body;
 	if (!body) {
 		return { ok: false, reason: "stream-parse-error", errorMessage: "Response body is null" };
@@ -122,6 +137,7 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 	let usage: V2CompactionUsage | undefined;
 	let serverError: string | undefined;
 	let completed = false;
+	let incompleteTerminal = false;
 
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
@@ -129,13 +145,11 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 
 	try {
 		stream: while (true) {
-			if (signal?.aborted) {
-				reader.cancel();
-				return { ok: false, reason: "aborted" as const };
-			}
-
-			const { done, value } = await reader.read();
+			signal.throwIfAborted();
+			const { done, value } = await transport.wait(() => reader.read());
+			signal.throwIfAborted();
 			if (done) break;
+			transport.bytes(value.byteLength);
 
 			buffer += decoder.decode(value, { stream: true });
 			const lines = buffer.split("\n");
@@ -145,10 +159,14 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 			for (const line of lines) {
 				const trimmed = line.trim();
 				if (!trimmed || trimmed.startsWith(":")) continue;
-				if (!trimmed.startsWith("data: ")) continue;
+				if (!trimmed.startsWith("data:")) continue;
 
-				const jsonStr = trimmed.slice(6);
-				if (jsonStr === "[DONE]") continue;
+				const jsonStr = trimmed.slice(5).trimStart();
+				if (jsonStr === "[DONE]") {
+					transport.event("[DONE]");
+					incompleteTerminal = true;
+					break stream;
+				}
 
 				let event: Record<string, unknown>;
 				try {
@@ -159,6 +177,16 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 				}
 
 				const eventType = event.type;
+				transport.event(eventType);
+				if ((eventType === "response.output_item.added" || eventType === "response.output_item.done") &&
+					isRecord(event.item) && (event.item.type === "compaction" || event.item.type === "compaction_summary")) {
+					// An announced output is already ambiguous billed work, even before the blob arrives.
+					transport.output();
+				}
+				if (eventType === "response.incomplete") {
+					incompleteTerminal = true;
+					break stream;
+				}
 
 				if (eventType === "response.output_item.done") {
 					const item = event.item;
@@ -174,6 +202,7 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 
 				if (eventType === "response.completed") {
 					completed = true;
+					transport.completed();
 					const resp = event.response;
 					if (isRecord(resp)) {
 						responseId = typeof resp.id === "string" ? resp.id : undefined;
@@ -195,27 +224,26 @@ async function collectStreamOutput(response: Response, signal?: AbortSignal): Pr
 			}
 		}
 	} catch (error) {
-		if (signal?.aborted || isAbortError(error)) {
-			return { ok: false, reason: "aborted" as const };
-		}
+		const interrupted = interruptionReason(transport, error);
+		if (interrupted) return { ok: false, reason: interrupted };
 		return {
 			ok: false,
-			reason: compactionItems.length > 0 ? "incomplete-response" : "stream-parse-error",
+			reason: transport.outputReceived ? "incomplete-response" : "stream-parse-error",
 			errorMessage: error instanceof Error ? error.message : String(error),
 		};
 	} finally {
-		// Completion is terminal even when a gateway keeps the HTTP body open.
-		try { await reader.cancel(); } catch { /* noop */ }
-		try { reader.releaseLock(); } catch { /* noop */ }
+		// A gateway's cancellation acknowledgement must not keep a terminal operation open.
+		void reader.cancel().catch(() => {});
+		try { reader.releaseLock(); } catch { /* A pending read is canceled above. */ }
 	}
 
-	if (serverError) {
+	if (serverError !== undefined) {
 		return { ok: false, reason: "provider-failed", errorMessage: serverError };
 	}
 	if (!completed) {
 		return {
 			ok: false,
-			reason: compactionItems.length > 0 ? "incomplete-response" : "stream-parse-error",
+			reason: transport.outputReceived || incompleteTerminal ? "incomplete-response" : "stream-parse-error",
 			errorMessage: "Responses stream ended before response.completed",
 		};
 	}
@@ -241,24 +269,27 @@ async function executeV2Attempt(
 	url: string,
 	requestBody: unknown,
 	headers: Record<string, string>,
-	signal?: AbortSignal,
+	transport: V2Transport,
 ): Promise<{ response?: Response; result?: StreamCollectionResult; failure?: V2CompactionFailure }> {
-	if (signal?.aborted) {
-		return { failure: { ok: false, reason: "aborted" } };
-	}
+	const { signal } = transport;
 
 	let response: Response;
 	try {
-		response = await fetch(url, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(requestBody),
-			signal,
+		response = await transport.wait(async () => {
+			const received = await fetch(url, {
+				method: "POST", headers, body: JSON.stringify(requestBody), signal,
+			});
+			if (signal.aborted) {
+				// A non-cooperative fetch may resolve after the caller has already returned.
+				void received.body?.cancel().catch(() => {});
+				signal.throwIfAborted();
+			}
+			return received;
 		});
+		transport.headers();
 	} catch (error) {
-		if (signal?.aborted || isAbortError(error)) {
-			return { failure: { ok: false, reason: "aborted" } };
-		}
+		const interrupted = interruptionReason(transport, error);
+		if (interrupted) return { failure: { ok: false, reason: interrupted } };
 		return {
 			failure: {
 				ok: false,
@@ -271,7 +302,7 @@ async function executeV2Attempt(
 	if (!response.ok) {
 		let errorMessage: string | undefined;
 		try {
-			const text = await response.text();
+			const text = await transport.wait(() => response.text());
 			if (text.trim()) {
 				try {
 					const json = JSON.parse(text);
@@ -282,7 +313,10 @@ async function executeV2Attempt(
 					errorMessage = text;
 				}
 			}
-		} catch { /* swallow */ }
+		} catch (error) {
+			const interrupted = interruptionReason(transport, error);
+			if (interrupted) return { response, failure: { ok: false, reason: interrupted } };
+		}
 		return {
 			response,
 			failure: {
@@ -294,7 +328,7 @@ async function executeV2Attempt(
 		};
 	}
 
-	const result = await collectStreamOutput(response, signal);
+	const result = await collectStreamOutput(response, transport);
 	return { response, result };
 }
 
@@ -326,9 +360,20 @@ function isRetryable(result: V2CompactionFailure): boolean {
 export async function executeV2Compaction(
 	options: ExecuteV2CompactionOptions,
 ): Promise<V2CompactionResult> {
+	const transport = new V2Transport({
+		signal: options.signal, timeoutMs: options.timeoutMs,
+		idleTimeoutMs: options.idleTimeoutMs ?? options.settings?.nativeV2IdleTimeoutMs,
+		onProgress: options.onProgress,
+	});
+	try {
+		const result = await executeWithTransport(options, transport);
+		return { ...result, diagnostics: transport.snapshot() };
+	} finally { transport.dispose(); }
+}
+
+async function executeWithTransport(options: ExecuteV2CompactionOptions, transport: V2Transport): Promise<V2CompactionSuccess | V2CompactionFailure> {
 	const { runtime, request, settings, context } = options;
-	const deadline = AbortSignal.timeout(600_000);
-	const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+	const { signal } = transport;
 	const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
 
 	const headers = toHeaders(runtime, SSE_ACCEPT, request.input);
@@ -349,7 +394,7 @@ export async function executeV2Compaction(
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		if (signal?.aborted) {
-			const aborted: V2CompactionFailure = { ok: false, reason: "aborted" };
+			const aborted: V2CompactionFailure = { ok: false, reason: interruptionReason(transport)! };
 			writeV2Artifact(
 				{ request: { url, headers, body: requestBody }, attempt, outcome: aborted },
 				settings,
@@ -358,7 +403,8 @@ export async function executeV2Compaction(
 			return aborted;
 		}
 
-		const { result, failure } = await executeV2Attempt(url, requestBody, headers, signal);
+		transport.begin(attempt + 1);
+		const { result, failure } = await executeV2Attempt(url, requestBody, headers, transport);
 
 		if (failure) {
 			lastFailure = failure;

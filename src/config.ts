@@ -228,6 +228,13 @@ export function loadExtensionConfig(configPath: string = CONFIG_PATH): LoadedExt
 			toCompactionVersion(raw.compactionVersion, "compactionVersion", warnings) ??
 			resolved.compactionVersion;
 
+		if (raw.nativeV2IdleTimeoutMs !== undefined) {
+			const value = raw.nativeV2IdleTimeoutMs;
+			if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 600_000) {
+				resolved.nativeV2IdleTimeoutMs = value;
+			} else warnings.push("Ignoring nativeV2IdleTimeoutMs: expected an integer from 0 to 600000 (0 disables idle timeout).");
+		}
+
 		if (typeof raw.artifactRoot === "string" && raw.artifactRoot.trim().length > 0) {
 			resolved.artifactRoot = raw.artifactRoot.trim();
 		} else if (raw.artifactRoot !== undefined) {

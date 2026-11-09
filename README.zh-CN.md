@@ -12,7 +12,7 @@
 
 ## 发布版本与分支约定
 
-当前已发布并安装的维护版本为 **0.7.4-fork.5**，基于社区 **0.7.4**；**0.7.4-fork.4** 保留为不可变回退版本。实际验收见[维护记录](docs/maintenance/2026-10-30-replay-parity-fork5.md)。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
+本源码目标版本为 **0.7.4-fork.6**，基于社区 **0.7.4**，修复原生 V2 超时分类并补充不含正文的进度诊断。此前已核验发布和安装的 **0.7.4-fork.5** 保留为回退版本，见[维护记录](docs/maintenance/2026-10-30-replay-parity-fork5.md)。源码版本、GitHub 发布、磁盘选择和活跃会话加载分别核验；fork 使用 `<社区版本>-fork.<修订号>`，不冒充社区新版本。
 
 - `main`：我们的维护、整合与发布主线，保留 fork 修复。
 - `upstream-main`：仅镜像社区 `main`，不加入 fork 提交，也不作为安装来源。
@@ -21,16 +21,16 @@
 固定版本安装：
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
 ```
 
-[GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) 提供可安装的包、来源清单和 `SHA256SUMS` 校验文件；这不是向上游作者的 npm 命名空间发布。发布及制品安装流程见[维护说明](docs/releasing.md)。
+安装前核对同版本 Release 与校验文件确实存在。[GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) 提供可安装的包、来源清单和 `SHA256SUMS` 校验文件；这不是向上游作者的 npm 命名空间发布。发布及制品安装流程见[维护说明](docs/releasing.md)。
 
 ## 安装
 
 ```bash
 # 核对同版本 Release 后安装固定维护版。
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
 ```
 
 上游 npm 包 `@lll9p/pi-better-compaction` 是独立发布版本，不一定包含本 fork 的修复。安装后执行 `/reload` 生效。
@@ -65,6 +65,7 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
 {
   "enabled": true,
   "compactionVersion": "v2",
+  "nativeV2IdleTimeoutMs": 0,
   "compactionModel": null,
   "additionalCompactionModels": [],
   "localCompactionModels": [],
@@ -88,6 +89,7 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
 |------|------|--------|------|
 | `enabled` | `boolean` | `true` | 设为 `false` 可停用新压缩与原生回放；若当前会话已有只含占位摘要的原生 checkpoint，安全中止保护仍生效，不能把占位文本当真实摘要发送。 |
 | `compactionVersion` | `"v1" \| "v2"` | `"v2"` | Responses 系列 API 的压缩协议。**V2**（流式，加密 blob）是 OpenAI 当前默认协议；**V1** 使用旧版 `/responses/compact` 端点。 |
+| `nativeV2IdleTimeoutMs` | `number` | `0` | V2 可选网络空闲期限，整数 0–600000 毫秒；默认 `0` 关闭。原有整次原生操作 600 秒期限仍保留，不把正常慢压缩误判为空闲故障。 |
 | `compactionModel` | `string \| null` | `null` | 原生失败后的第一文本回退模型，也是实际跨模型请求时首个可移植摘要候选。格式为 `"provider/model-id"`；`null` 表示跳过此候选。 |
 | `additionalCompactionModels` | `string[]` | `[]` | 在 `compactionModel` 之后依次尝试的其他文本模型，最后才用 Pi 默认/当前模型。无效项会告警跳过，重复项只试一次。 |
 | `localCompactionModels` | `{modelId, thinkingLevel}[]` | `[]` | 非空时取代上述两项按渠道指定的模型列表，按模型 ID 排序；仅选择 Pi 已注册、渠道名包含原样字符串 `local` 的候选。同一型号有多个合格渠道时按渠道名顺序尝试。未注册或鉴权不可用则跳过，实际压缩失败再试下一项，不额外调用模型做预探测。 |
@@ -134,6 +136,14 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.5
   "compactionVersion": "v1"
 }
 ```
+
+## 原生 V2 等待与超时恢复
+
+自动与手动压缩仍使用同一条原生优先路径。状态栏显示请求、响应头、读流、压缩输出、完成等阶段，以及总耗时、空闲时长和尝试次数；即使没有响应字节也每秒更新。整次原生操作仍最多 600 秒，重试不续期；可选网络空闲期限默认关闭。`deadline-exceeded` 与 `idle-timeout` 不再被当成用户取消，而是进入既有安全文本/可移植历史回退；用户主动取消仍立即停止整条回退链。V1、Anthropic 和文本摘要的传输期限不变。
+
+已宣告或收到压缩输出、但缺少 `response.completed` 时，不保存部分 checkpoint，也不再发第二笔原生请求。`[DONE]` 和 `response.incomplete` 会结束读流，不继续等待 HTTP 关闭。这不代表未知计费已经消除，也不能证明上游已停止工作。
+
+每笔返回的原生操作只追加一条不进入模型上下文的 `pi-better-compaction-native-attempt` 元数据，保存固定分类、耗时、计数与自动/手动触发原因，不记录正文、URL、凭据、响应 ID 或 blob。`/compaction-status` 可显示当前状态及当前分支最近十二条原生观察，reload 后仍可查看。
 
 ## 工作原理
 

@@ -68,6 +68,8 @@ export type ExtensionConfig = {
 	 * V2 failures enter the configured text-model fallback chain, then Pi's default.
 	 */
 	compactionVersion: CompactionVersion;
+	/** Optional V2 network-idle bound; 0 preserves the existing 600-second overall deadline only. */
+	nativeV2IdleTimeoutMs: number;
 	notifyOnLoad: boolean;
 	debug: boolean;
 	logProviderPayloads: boolean;
@@ -333,6 +335,7 @@ export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
 	compactionThinkingLevel: "off",
 	responsesCompactApis: [...RESPONSES_COMPACT_CAPABLE_APIS],
 	compactionVersion: "v2",
+	nativeV2IdleTimeoutMs: 0,
 	notifyOnLoad: false,
 	debug: false,
 	logProviderPayloads: false,

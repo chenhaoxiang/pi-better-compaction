@@ -42,6 +42,7 @@ import {
 } from "./runtime";
 import { serializeMessagesToCompactRequest, serializeMessagesToResponsesInput, type NativeCompactionRequestBody, type ResponsesInputItem } from "./serializer";
 import { mapAnthropicCompactionUsage, mapResponsesCompactionUsage } from "./usage";
+import { NATIVE_ATTEMPT_ENTRY, type V2CompactionDiagnostics } from "./v2-transport";
 import {
 	ANTHROPIC_COMPACTION_STRATEGY,
 	createNativeCompactionDetails,
@@ -166,7 +167,8 @@ function getSessionId(ctx: ExtensionContext): string | undefined {
 
 function notifyWarning(ctx: ExtensionContext, message: string): void {
 	if (ctx.hasUI) {
-		ctx.ui.notify(`${EXTENSION_ID}: ${message}`, "warning");
+		try { ctx.ui.notify(`${EXTENSION_ID}: ${message}`, "warning"); }
+		catch { /* A warning must not decide fallback or history safety. */ }
 	}
 }
 
@@ -432,6 +434,9 @@ async function runResponsesV2Compact(
 		runtime,
 		request,
 		signal: event.signal,
+		trigger: event.reason,
+		onProgress: progress => setCompactionStatus(ctx,
+			`Responses native V2 (${runtime.provider}/${runtime.model}) · ${progress.phase} · ${Math.floor(progress.elapsedMs / 1000)}s · idle ${Math.floor(progress.idleMs / 1000)}s · attempt ${progress.attempt}`),
 		settings: config,
 		context: ctx,
 	});
@@ -448,7 +453,10 @@ async function runResponsesV2Compact(
 			config,
 			ctx,
 		);
-		return v2Result.reason === "aborted" ? { outcome: "aborted" } : { outcome: "failed" };
+		if (v2Result.reason !== "aborted") {
+			notifyWarning(ctx, `Responses native V2 failed (${v2Result.reason}); trying safe text fallback. Partial native output is not saved or automatically retried.`);
+		}
+		return v2Result.reason === "aborted" || event.signal.aborted ? { outcome: "aborted" } : { outcome: "failed" };
 	}
 
 	// Keep provenance before Pi turns custom notices into provider-role user items.
@@ -1193,24 +1201,43 @@ export function registerExtensionRuntime(
 	dependencies: ExtensionRuntimeDependencies = DEFAULT_DEPENDENCIES,
 ): void {
 	const attempts: Attempt[] = [];
-	const reasons = new Set(["aborted", "non-2xx", "empty-body", "invalid-json", "malformed-response", "empty-output", "network-error", "stream-parse-error", "provider-failed", "incomplete-response", "no-compaction-output", "multiple-compaction-outputs", "retries-exhausted", "no-model-configured", "invalid-model-spec", "model-not-found", "same-as-current-model", "auth-failed", "empty-summary", "compact-failed", "all-models-failed", "request-failed", "invalid-response",
+	let activeNative: V2CompactionDiagnostics | undefined;
+	const reasons = new Set(["aborted", "deadline-exceeded", "idle-timeout", "non-2xx", "empty-body", "invalid-json", "malformed-response", "empty-output", "network-error", "stream-parse-error", "provider-failed", "incomplete-response", "no-compaction-output", "multiple-compaction-outputs", "retries-exhausted", "no-model-configured", "invalid-model-spec", "model-not-found", "same-as-current-model", "auth-failed", "empty-summary", "compact-failed", "all-models-failed", "request-failed", "invalid-response",
 		"compaction-boundary-not-found", "first-kept-entry-not-found", "unsupported-instructions", "invalid-compacted-window",
 		"native-history-edited-after-checkpoint", "unexpected-compaction-after-boundary", "expected-pi-replay-mismatch"]);
-	const capture = (method: string, result: { ok: boolean; reason?: string }) => {
-		attempts.push({ method, outcome: result.ok ? "response-ok" : "failed", ...(!result.ok ? { reason: reasons.has(result.reason ?? "") ? result.reason : "unclassified" } : {}) });
+	const capture = (method: string, result: { ok: boolean; reason?: string; diagnostics?: V2CompactionDiagnostics }, trigger?: Attempt["trigger"]) => {
+		const attempt: Attempt = { method, outcome: result.ok ? "response-ok" : "failed", ...(!result.ok ? { reason: reasons.has(result.reason ?? "") ? result.reason : "unclassified" } : {}),
+			...(trigger ? { trigger } : {}), ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}) };
+		attempts.push(attempt);
 		if (attempts.length > 12) attempts.shift();
+		return attempt;
 	};
 	const original = dependencies;
 	dependencies = {
 		...original,
 		executeNativeCompaction: async (...args) => { const result = await original.executeNativeCompaction(...args); capture("Responses v1", result); return result; },
-		executeV2Compaction: async (...args) => { const result = await original.executeV2Compaction(...args); capture("Responses v2", result); return result; },
+		executeV2Compaction: async options => {
+			try {
+				const result = await original.executeV2Compaction({ ...options, onProgress: progress => {
+					activeNative = progress;
+					options.onProgress?.(progress);
+				} });
+				const attempt = capture("Responses v2", result, options.trigger);
+				// A single context-invisible metadata entry survives reload without full payload logging.
+				if (result.diagnostics) {
+					try { pi.appendEntry?.(NATIVE_ATTEMPT_ENTRY, { schemaVersion: 1, ...attempt }); }
+					catch { /* Diagnostic persistence cannot decide compaction. */ }
+				}
+				return result;
+			} finally { activeNative = undefined; }
+		},
 		executeAnthropicCompaction: async (...args) => { const result = await original.executeAnthropicCompaction(...args); capture("Anthropic", result); return result; },
 		runNativeFallbackCompaction: async (...args) => { const result = await original.runNativeFallbackCompaction(...args); capture("Text fallback", result); return result; },
 		summarizePortableHistory: async (...args) => { const result = await original.summarizePortableHistory(...args); capture("Portable summary", result); return result; },
 	};
 	registerCompactionDiagnostics(pi, {
 		attempts: () => attempts,
+		activeNative: () => activeNative,
 		portableState: branch => {
 			const checkpoint = latestOpaqueCheckpoint(branch);
 			if (latestOpaqueMarker(branch) && !checkpoint) return "invalid-checkpoint";
@@ -1226,6 +1253,7 @@ export function registerExtensionRuntime(
 
 	pi.on("session_start", (_event, ctx) => {
 		attempts.length = 0;
+		activeNative = undefined;
 		const { config, source, warnings } = dependencies.loadExtensionConfig();
 		if (!config.enabled) return;
 
