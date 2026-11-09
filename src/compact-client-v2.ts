@@ -265,6 +265,24 @@ function normalizeTimestamp(value: unknown): string | undefined {
 
 // ── Single attempt ─────────────────────────────────────────────────────
 
+async function readErrorText(response: Response, transport: V2Transport): Promise<string> {
+	if (!response.body) return "";
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
+	try {
+		while (true) {
+			const { done, value } = await transport.wait(() => reader.read());
+			if (done) return text + decoder.decode();
+			transport.bytes(value.byteLength);
+			text += decoder.decode(value, { stream: true });
+		}
+	} finally {
+		void reader.cancel().catch(() => {});
+		try { reader.releaseLock(); } catch { /* A pending read is canceled above. */ }
+	}
+}
+
 async function executeV2Attempt(
 	url: string,
 	requestBody: unknown,
@@ -302,7 +320,7 @@ async function executeV2Attempt(
 	if (!response.ok) {
 		let errorMessage: string | undefined;
 		try {
-			const text = await transport.wait(() => response.text());
+			const text = await readErrorText(response, transport);
 			if (text.trim()) {
 				try {
 					const json = JSON.parse(text);

@@ -60,12 +60,26 @@ test("deadline settles a silent open SSE reader without relying on fetch abort",
 	expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-test("deadline also bounds a non-2xx response whose error body never ends", async () => {
-	const fetch = mock(async () => new Response(new ReadableStream({}), { status: 503 }));
+test("deadline also cancels a non-2xx response whose error body never ends", async () => {
+	let canceled = false;
+	const fetch = mock(async () => new Response(new ReadableStream({
+		cancel() { canceled = true; return Promise.reject(new Error("synthetic cancel acknowledgement failure")); },
+	}), { status: 503 }));
 	globalThis.fetch = fetch as never;
 	const result = await bounded(executeV2Compaction(options({ timeoutMs: 25, maxRetries: 2 })));
 	expect(result).toMatchObject({ ok: false, reason: "deadline-exceeded", diagnostics: { phase: "headers" } });
 	expect(fetch).toHaveBeenCalledTimes(1);
+	expect(canceled).toBe(true);
+});
+
+test("non-2xx error bodies preserve decoder content and tolerate an absent body", async () => {
+	globalThis.fetch = mock(async () => new Response(null, { status: 503 })) as never;
+	expect(await executeV2Compaction(options())).toMatchObject({ ok: false, reason: "non-2xx", status: 503 });
+	const bytes = new TextEncoder().encode('{"error":{"message":"合成错误"}}');
+	globalThis.fetch = mock(async () => new Response(new ReadableStream({
+		start(c) { c.enqueue(bytes.slice(0, 23)); c.enqueue(bytes.slice(23)); c.close(); },
+	}), { status: 503 })) as never;
+	expect(await executeV2Compaction(options())).toMatchObject({ ok: false, reason: "non-2xx", errorMessage: "合成错误" });
 });
 
 test("caller cancellation remains immediate and wins when both signals are aborted", async () => {
