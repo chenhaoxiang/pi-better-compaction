@@ -158,7 +158,7 @@ The optional cache reads at most4096 recent branch entries and retains at most8 
 
 Chunk preparation sizes messages linearly, yields for native cancellation and rechecks actual serialized chunk size. Large models use the existing conservative half-window bound (with a1MiB payload cap) instead of the old250k cap; accumulated summary plus chunk still must fit the existing safe-input bound. No model, thinking, fallback order, retry worker or global setting changes. A synthetic4000-message fixture covered all input and reduced zero-latency stub calls4→3; CPU timings remain delivery evidence, not real-provider latency, quality, p95 or overall ROI.
 
-Cancellation is cooperative: it stops the chain and keeps successful prefixes, not an unfinished request or a partial native checkpoint. A successful local cancel does not prove upstream cancellation/refund. Adoption still requires a normal safe-point runtime transition; do not wake/reload retired or active business sessions to test it.
+Cancellation is cooperative: it stops the chain and keeps successful prefixes, not an unfinished request or a partial native checkpoint. A nonempty streamed fragment is not completion: the production adapter observes the actual SDK stop reason, and caller cancellation/aborted/incomplete output is checked before advancing any prefix; returned usage is retained. Pre-fix candidate progress identities are not reused. A successful local cancel does not prove upstream cancellation/refund. Adoption still requires a normal safe-point runtime transition; do not wake/reload retired or active business sessions to test it.
 
 ## Safety boundaries
 

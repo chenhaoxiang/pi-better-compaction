@@ -73,6 +73,10 @@ Completed portable chunks MAY cache bounded context-invisible native-branch prog
 - **WHEN** one chunk completed and cancellation stops the next work
 - **THEN** the failed attempt does not return partial success, and a later matching attempt may start with the verified prefix and only generate remaining chunks, including after native-entry persistence and runtime reopening. Older uncheckpointed partial work remains unavailable.
 
+#### Scenario: SDK returns partial text on abort
+- **WHEN** the SDK returns nonempty partial text with an aborted/incomplete final response or the caller cancels before the chunk can be committed
+- **THEN** returned usage is preserved but no progress or complete event is committed for that chunk. Only prior successful prefixes remain reusable, the unfinished chunk is processed again on an authorized normal attempt, and cancellation never starts a backup candidate.
+
 #### Scenario: Changed or corrupted progress
 - **WHEN** identity, endpoint, instructions, thinking, prefix input, chunking policy or output digest differs, or cache coverage is unavailable
 - **THEN** that prefix is not reused; missing evidence never becomes a completed summary. A partial cache alone does not permit cache warming with an opaque-only history.

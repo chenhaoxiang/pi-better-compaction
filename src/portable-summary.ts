@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Api, Model, Usage } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm, generateSummaryWithUsage, serializeConversation, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { getTextCompactionCandidates, type TextCompactionCandidate } from "./model-candidates";
 import { NATIVE_COMPACTION_FALLBACK_SUMMARY, type ExtensionConfig } from "./types";
@@ -18,7 +19,8 @@ type GenerateInput = {
 	sessionId?: string;
 	reserveTokens: number;
 };
-export type PortableSummaryGenerator = (input: GenerateInput) => Promise<{ text: string; usage?: Usage }>;
+/** Supplied generators guarantee complete text unless they report non-normal completion; the production SDK adapter always reports it. */
+export type PortableSummaryGenerator = (input: GenerateInput) => Promise<{ text: string; usage?: Usage; completion?: "complete" | "aborted" | "incomplete" }>;
 export type PortableUsageRecord = { provider: string; model: string; usage: Usage };
 export type PortableSummaryProgress = {
 	candidate: TextCompactionCandidate;
@@ -123,11 +125,28 @@ function cleanHeaders(headers: Auth["headers"]): Record<string, string> | undefi
 	return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-const defaultGenerate: PortableSummaryGenerator = async (input) => generateSummaryWithUsage(
-	input.messages, input.model, input.reserveTokens, input.auth.apiKey,
-	cleanHeaders(input.auth.headers), input.signal, input.customInstructions, input.previousSummary,
-	input.thinkingLevel, undefined, input.auth.env, undefined, undefined, input.sessionId,
-);
+const defaultGenerate: PortableSummaryGenerator = async (input) => {
+	let returned: AssistantMessage | undefined;
+	// The pinned SDK can return aborted partial text without throwing. Observe its
+	// actual final stop reason through the same transport; do not infer completion
+	// from nonempty text or from a caller signal that might not be aborted.
+	const observedStream: NonNullable<Parameters<typeof generateSummaryWithUsage>[9]> = (model, context, options) => {
+		const stream = streamSimple(model, context, options);
+		void stream.result().then(message => { returned = message; }, () => {});
+		return stream;
+	};
+	try {
+		const result = await generateSummaryWithUsage(
+			input.messages, input.model, input.reserveTokens, input.auth.apiKey,
+			cleanHeaders(input.auth.headers), input.signal, input.customInstructions, input.previousSummary,
+			input.thinkingLevel, observedStream, input.auth.env, undefined, undefined, input.sessionId,
+		);
+		return { ...result, completion: returned?.stopReason === "stop" ? "complete" : returned?.stopReason === "aborted" ? "aborted" : "incomplete" };
+	} catch (error) {
+		if (returned) return { text: "", usage: returned.usage, completion: returned.stopReason === "aborted" ? "aborted" : "incomplete" };
+		throw error;
+	}
+};
 
 /** Complete coverage only. Reported usage contains calls made by this invocation, never reused-prefix calls. */
 export async function summarizePortableHistory(args: {
@@ -171,7 +190,7 @@ export async function summarizePortableHistory(args: {
 		let auth: Auth;
 		try { const result = await ctx.modelRegistry.getApiKeyAndHeaders(model); if (!result.ok) continue; auth = result; } catch { continue; }
 		const thinkingLevel = spec === activeSpec && config.localCompactionModels.length === 0 ? (ctx.thinkingLevel ?? candidate.thinkingLevel) : candidate.thinkingLevel;
-		const candidateDigest = createHash("sha256").update(JSON.stringify({ version: 1, checkpointId: args.checkpointId, provider: model.provider, model: model.id, api: model.api, baseUrl: model.baseUrl, authBaseUrl: auth.baseUrl, contextWindow: model.contextWindow, maxTokens: model.maxTokens, reserveTokens, maxChunkBytes, thinkingLevel, customInstructions: args.customInstructions })).digest("hex");
+		const candidateDigest = createHash("sha256").update(JSON.stringify({ version: 2, checkpointId: args.checkpointId, provider: model.provider, model: model.id, api: model.api, baseUrl: model.baseUrl, authBaseUrl: auth.baseUrl, contextWindow: model.contextWindow, maxTokens: model.maxTokens, reserveTokens, maxChunkBytes, thinkingLevel, customInstructions: args.customInstructions })).digest("hex");
 		const prefixes: string[] = [];
 		let digest = candidateDigest;
 		for (let i = 0; i < chunks.length; i++) {
@@ -199,6 +218,8 @@ export async function summarizePortableHistory(args: {
 			try {
 				const response = await generate({ messages: chunk, model, auth, previousSummary: summary, customInstructions: args.customInstructions, thinkingLevel, signal, sessionId: args.sessionId, reserveTokens });
 				if (response.usage) usageRecords.push({ provider: model.provider, model: model.id, usage: response.usage });
+				if (signal?.aborted || response.completion === "aborted") return { ok: false, reason: "aborted", usageRecords };
+				if (response.completion === "incomplete") { progress("failed"); failed = true; break; }
 				if (!response.text.trim() || response.text.trim() === NATIVE_COMPACTION_FALLBACK_SUMMARY) { progress("failed"); failed = true; break; }
 				summary = response.text.trim();
 				if (args.checkpointId && chunkIndex < MAX_CHECKPOINT_CHUNKS && Buffer.byteLength(summary, "utf8") <= MAX_CHECKPOINT_BYTES) {
