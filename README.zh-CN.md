@@ -12,7 +12,7 @@
 
 ## 发布版本与分支约定
 
-本源码目标版本为 **0.7.4-fork.6**，基于社区 **0.7.4**，修复原生 V2 超时分类并补充不含正文的进度诊断。此前已核验发布和安装的 **0.7.4-fork.5** 保留为回退版本，见[维护记录](docs/maintenance/2026-10-30-replay-parity-fork5.md)。源码版本、GitHub 发布、磁盘选择和活跃会话加载分别核验；fork 使用 `<社区版本>-fork.<修订号>`，不冒充社区新版本。
+本源码目标版本为 **0.7.4-fork.7**，基于社区 **0.7.4**，增加可验证的 portable 前缀接续和可取消的线性分块准备，保留原生 V2 诊断。此前 fork.6 及更早固定版本保留；旧运行时忽略前缀进度，回退可能需要完整重算。源码版本、GitHub 发布、磁盘选择和活跃会话加载分别核验；fork 使用 `<社区版本>-fork.<修订号>`，不冒充社区新版本。
 
 - `main`：我们的维护、整合与发布主线，保留 fork 修复。
 - `upstream-main`：仅镜像社区 `main`，不加入 fork 提交，也不作为安装来源。
@@ -21,7 +21,7 @@
 固定版本安装：
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.7
 ```
 
 安装前核对同版本 Release 与校验文件确实存在。[GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) 提供可安装的包、来源清单和 `SHA256SUMS` 校验文件；这不是向上游作者的 npm 命名空间发布。发布及制品安装流程见[维护说明](docs/releasing.md)。
@@ -30,10 +30,10 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
 
 ```bash
 # 核对同版本 Release 后安装固定维护版。
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.7
 ```
 
-上游 npm 包 `@lll9p/pi-better-compaction` 是独立发布版本，不一定包含本 fork 的修复。安装后执行 `/reload` 生效。
+上游 npm 包 `@lll9p/pi-better-compaction` 是独立发布版本，不一定包含本 fork 的修复。只在安全空闲点按正常流程采用；安装不热更新活动会话，不为验证强制重载原业务。
 
 ## Anthropic 按需压缩
 
@@ -44,6 +44,16 @@ pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
 选择不兼容模型时会提示需要可移植历史，但本 fork 仍只在第一次实际请求前准备摘要；不能安全恢复时中止请求。仅切换模型不会调用摘要模型。
 
 已有 OpenAI 不透明 checkpoint 时，绝不会把占位摘要直接交给 Anthropic：先重建可移植历史，失败则明确中止。仅记录提供商实际返回且有效的输入、输出和缓存用量；缺失不编造。本轮测试全部使用合成传输，未验证真实账号的 beta 接受情况。
+
+## fork.7 的可恢复分块
+
+已成功的 portable 块会在原会话分支追加不可见于模型上下文的 `pi-better-compaction-portable-progress`。正常重试或新的运行时只有在原 native checkpoint、候选 provider/API/模型/端点、思考档、摘要指令、分块策略、完整原始及序列化前缀和摘要 hash 都匹配时才复用；剩余历史仍须完整处理，部分摘要不能当成完整业务历史。原 checkpoint、保留 tail 和 raw history 不改；旧版本未记录的已取消进度无法凭空恢复。
+
+可选缓存最多检查最近4096条分支记录、保留8个候选快照，每个摘要不超过1MiB、最多记录4096个已完成块。证据缺失、损坏、超出窗口或发生变化时正常安全重算，不假成功。前缀文本仍是原私有会话状态，不进入公开日志或另造数据库。复用前缀不会把旧调用用量再计一次；本次失败的手动 portable 调用也保留实际已返回用量，缺失账单仍未知。
+
+分块准备改为线性计量并让出事件循环响应取消，每个实际序列化块仍复核预算。大模型在原保守半窗口约束内使用最多1MiB块，不再固定250k；累计摘要加新块仍受原安全输入预算保护。未改模型、思考档、渠道、回退顺序或全局设置，没有后台重试器。一个4000消息合成夹具保持输入全覆盖、零延迟stub调用4→3；CPU测量保留在交付原件，不外推真实供应商耗时、质量、p95或整体ROI。
+
+取消仍为合作取消，只保留已经成功的前缀，不把未完成请求或部分native输出标为完成，也不保证上游已停或退款。新运行时要在正常安全点采用，不能为测试唤醒退休会话或强制重载业务。
 
 ## 要求
 
