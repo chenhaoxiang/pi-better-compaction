@@ -66,6 +66,29 @@ When the current request is expected to replay a native checkpoint but its envir
 - **WHEN** the extension is disabled while an opaque-only checkpoint remains in the active session
 - **THEN** it stops new compaction but still aborts a request that would send the placeholder as history.
 
+### Requirement: Verified resumable portable prefixes
+Completed portable chunks MAY cache bounded context-invisible native-branch progress. Reuse SHALL require exact checkpoint, candidate identity and input/output digests. Remaining history SHALL be complete before business context uses it. Raw history, native checkpoint and retained tail SHALL remain unchanged. No retry worker or second history store is introduced.
+
+#### Scenario: Cancel and resume without repeated completed calls
+- **WHEN** one chunk completed and cancellation stops the next work
+- **THEN** the failed attempt does not return partial success, and a later matching attempt may start with the verified prefix and only generate remaining chunks, including after native-entry persistence and runtime reopening. Older uncheckpointed partial work remains unavailable.
+
+#### Scenario: SDK returns partial text on abort
+- **WHEN** the SDK returns nonempty partial text with an aborted/incomplete final response or the caller cancels before the chunk can be committed
+- **THEN** returned usage is preserved but no progress or complete event is committed for that chunk. Only prior successful prefixes remain reusable, the unfinished chunk is processed again on an authorized normal attempt, and cancellation never starts a backup candidate.
+
+#### Scenario: Changed or corrupted progress
+- **WHEN** identity, endpoint, instructions, thinking, prefix input, chunking policy or output digest differs, or cache coverage is unavailable
+- **THEN** that prefix is not reused; missing evidence never becomes a completed summary. A partial cache alone does not permit cache warming with an opaque-only history.
+
+#### Scenario: Responsive planning and bounded input
+- **WHEN** a long source is prepared or cancelled
+- **THEN** message sizing is linear with event-loop yields and exact serialized chunk rechecks, large-model payloads remain inside the existing safe half-window and accumulated-summary bounds, and caller cancellation stops the chain without changing model/thinking/fallback order or claiming upstream rollback.
+
+#### Scenario: Actual usage across recovery
+- **WHEN** a portable attempt fails or a later attempt reuses completed prefixes
+- **THEN** reported usage contains only calls made in that invocation; failed manual work also retains its reported usage separately, while missing or ambiguous billing remains unknown.
+
 ### Requirement: Native compaction usage accounting
 The extension SHALL include provider-reported native-compaction usage in the Pi compaction result when valid usage is available, using Pi's usage shape and the active model's pricing. It SHALL not fabricate usage when the provider omits it. Usage from an on-demand portable summary SHALL remain explicitly attributable even if the current public extension API cannot add it to Pi's own session totals.
 

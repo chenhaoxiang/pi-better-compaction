@@ -27,7 +27,7 @@ import { redactValue, writeDebugArtifact } from "./debug";
 import { findLatestCompactionEntry, isPersistedNativeCompactionEntry, resolveLatestNativeCompactionEntry } from "./details-store";
 import { runNativeFallbackCompaction } from "./native-fallback";
 import { collectNativeRetentionMessages, reconstructPendingPortableHistory, reconstructPortableHistory } from "./portable-history";
-import { summarizePortableHistory, type PortableSummaryProgress } from "./portable-summary";
+import { portableProgressOptions, summarizePortableHistory, type PortableSummaryProgress } from "./portable-summary";
 import {
 	rewriteResponsesPayloadWithNativeReplay,
 	serializeLiveTailToResponsesInput,
@@ -783,11 +783,17 @@ async function handleSessionBeforeCompact(
 			if (!source.ok) return cancelOpaqueCompaction(ctx, config, source.reason);
 			const portable = await dependencies.summarizePortableHistory({
 				messages: source.messages, ctx, config, signal: event.signal,
+				...portableProgressOptions(ctx.sessionManager.getBranch(), priorCheckpoint.id, state.appendEntry),
 				customInstructions: event.customInstructions, sessionId: getSessionId(ctx),
 				onCandidate: (candidate) => setCompactionStatus(ctx, `portable history summary ${candidate.spec} (${candidate.thinkingLevel})`),
 				onProgress: (progress) => setCompactionStatus(ctx, formatPortableSummaryProgress("portable history summary", progress)),
 			});
-			if (!portable.ok) return cancelOpaqueCompaction(ctx, config, portable.reason);
+			if (!portable.ok) {
+				if (portable.usageRecords.length) {
+					try { state.appendEntry?.(PORTABLE_USAGE_ENTRY_TYPE, { compactionEntryId: priorCheckpoint.id, usageRecords: portable.usageRecords, reason: portable.reason, createdAt: new Date().toISOString() }); } catch { /* Preserve cancellation even if accounting storage fails. */ }
+				}
+				return cancelOpaqueCompaction(ctx, config, portable.reason);
+			}
 			notifyCompactionMethod(ctx, `portable history summary (${portable.model.provider}/${portable.model.id})`);
 			return { compaction: {
 				summary: portable.summary,
@@ -948,6 +954,7 @@ async function handlePortableContext(
 			try {
 				result = await dependencies.summarizePortableHistory({
 					messages: source.messages,
+					...portableProgressOptions(branch, checkpoint.id, (type, data) => pi.appendEntry(type, data)),
 					ctx,
 					config,
 					signal: ctx.signal,

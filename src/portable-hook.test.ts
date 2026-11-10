@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { registerExtensionRuntime } from "./extension-runtime";
 import { serializeMessagesToResponsesInput } from "./serializer";
+import { PORTABLE_PROGRESS_ENTRY_TYPE, summarizePortableHistory } from "./portable-summary";
 import { createNativeCompactionDetails, DEFAULT_EXTENSION_CONFIG, NATIVE_COMPACTION_FALLBACK_SUMMARY } from "./types";
 
 const stamp = "2026-09-25T12:00:00.000Z";
@@ -26,7 +27,7 @@ const originalMessages = [
 	tail.message,
 ];
 
-function harness(opts: { fail?: boolean; failWithUsage?: boolean; initialEntries?: any[]; debugArtifactsFail?: boolean; configThrows?: boolean; disabled?: boolean } = {}) {
+function harness(opts: { fail?: boolean; failWithUsage?: boolean; initialEntries?: any[]; debugArtifactsFail?: boolean; configThrows?: boolean; disabled?: boolean; portable?: (args: any) => Promise<any> } = {}) {
 	const handlers = new Map<string, (event: any, ctx: any) => Promise<any> | any>();
 	const entries: any[] = opts.initialEntries ? [...opts.initialEntries] : [old, kept, checkpoint, tail];
 	const generated: string[][] = [];
@@ -50,7 +51,9 @@ function harness(opts: { fail?: boolean; failWithUsage?: boolean; initialEntries
 		executeNativeCompaction: async () => ({ ok: false, reason: "non-2xx" }) as never,
 		executeV2Compaction: async () => ({ ok: false, reason: "non-2xx" }) as never,
 		runNativeFallbackCompaction: async () => ({ ok: false, reason: "no-model-configured" }) as never,
-		summarizePortableHistory: async ({ messages, onCandidate, onProgress }: { messages: Array<{ content?: unknown }>; onCandidate?: (candidate: { spec: string; thinkingLevel: string }) => void; onProgress?: (progress: { candidate: { spec: string; thinkingLevel: string }; chunkIndex: number; chunkCount: number; phase: "start" | "complete" | "failed" }) => void }) => {
+		summarizePortableHistory: async (args: any) => {
+			if (opts.portable) return opts.portable(args);
+			const { messages, onCandidate, onProgress } = args;
 			generated.push(messages.map((message) => JSON.stringify(message)));
 			const candidate = { spec: "codex-local/kimi-k3", thinkingLevel: "max" } as const;
 			onCandidate?.(candidate);
@@ -252,6 +255,50 @@ test("a native-model payload mismatch aborts rather than letting Pi send the pla
 	] };
 	expect(await h.handlers.get("before_provider_request")!({ payload }, h.makeCtx(nativeModel))).toBeUndefined();
 	expect(h.aborted).toBe(1);
+});
+
+test("native progress entries survive a fresh runtime, but only complete verified history unlocks the request", async () => {
+	const controller = new AbortController(); let initialCalls = 0;
+	const hidden = [user("a", null, "fact-A-aaaaaaaaaa"), user("b", "a", "fact-B-bbbbbbbbbb"), user("c", "b", "fact-C-cccccccccc")];
+	const native = { ...checkpoint, parentId: "kept" }; const frozen = JSON.stringify(native);
+	const initial = [ ...hidden, { ...kept, parentId: "c" }, native, tail ];
+	const model = { provider: "codex-local", id: "kimi-k3", api: "openai-responses", contextWindow: 100000, maxTokens: 4096, baseUrl: "https://example.invalid/v1", input: ["text"], reasoning: false };
+	const usage = { input: 10, output: 2, totalTokens: 12, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+	const first = harness({ initialEntries: initial, portable: async args => summarizePortableHistory({ ...args, maxChunkBytes: 40,
+		onCheckpoint: value => { args.onCheckpoint?.(value); controller.abort(); },
+		generate: async () => { initialCalls++; return { text: "fact-A", usage }; },
+	}) });
+	const firstCtx = first.makeCtx(); firstCtx.signal = controller.signal; firstCtx.modelRegistry.find = () => model as never;
+	expect(await first.handlers.get("context")!({ messages: originalMessages }, firstCtx)).toBeUndefined();
+	expect(initialCalls).toBe(1); expect(first.aborted).toBe(1);
+	expect(first.entries.filter(e => e.customType === PORTABLE_PROGRESS_ENTRY_TYPE)).toHaveLength(1);
+	expect(first.entries.some(e => e.customType === "pi-better-compaction-portable-summary")).toBe(false);
+	expect(await first.handlers.get("cache_warming_decision")!({ action: "warm" }, first.makeCtx())).toEqual({ action: "stop" });
+	expect(await first.handlers.get("context")!({ messages: originalMessages }, first.makeCtx(nativeModel))).toBeUndefined();
+	const nativePayload = { model: nativeModel.id, instructions: "Synthetic prompt", input: [ { role: "system", content: "Synthetic prompt" }, ...serializeMessagesToResponsesInput(nativeModel as never, [originalMessages[0], kept.message, tail.message] as never) ] };
+	const replayed = await first.handlers.get("before_provider_request")!({ payload: nativePayload }, first.makeCtx(nativeModel));
+	expect(replayed.input).toContainEqual({ type: "compaction", encrypted_content: "opaque-blob" }); expect(initialCalls).toBe(1);
+	const seen: string[] = [];
+	const fresh = harness({ initialEntries: JSON.parse(JSON.stringify(first.entries)), portable: async args => summarizePortableHistory({ ...args, maxChunkBytes: 40,
+		generate: async ({ messages, previousSummary }) => { seen.push(JSON.stringify(messages)); return { text: `${previousSummary}; ${JSON.stringify(messages)}`, usage }; },
+	}) });
+	const nextCtx = fresh.makeCtx(); nextCtx.modelRegistry.find = () => model as never;
+	const complete = await fresh.handlers.get("context")!({ messages: originalMessages }, nextCtx);
+	expect(seen).toHaveLength(2); expect(seen.join(" ")).not.toContain("fact-A");
+	for (const fact of ["fact-A", "fact-B", "fact-C"]) expect(complete.messages[0].summary).toContain(fact);
+	expect(complete.messages[1]).toEqual(tail.message); expect(JSON.stringify(fresh.entries.find(e => e.id === "native1"))).toBe(frozen);
+	expect(fresh.entries.find(e => e.customType === "pi-better-compaction-portable-usage").data.usageRecords).toHaveLength(1);
+	expect(fresh.entries.find(e => e.customType === "pi-better-compaction-portable-summary").data.usageRecords).toHaveLength(2);
+	expect(fresh.aborted).toBe(0);
+});
+
+test("failed manual portable compaction retains actual unsuccessful usage without a partial compaction", async () => {
+	const h = harness({ failWithUsage: true });
+	const result = await h.handlers.get("session_before_compact")!({ signal: new AbortController().signal, preparation: { previousSummary: NATIVE_COMPACTION_FALLBACK_SUMMARY, firstKeptEntryId: "kept", tokensBefore: 2500, messagesToSummarize: [], turnPrefixMessages: [] } }, h.makeCtx());
+	expect(result).toEqual({ cancel: true });
+	const entries = h.entries.filter(e => e.customType === "pi-better-compaction-portable-usage");
+	expect(entries).toHaveLength(1); expect(entries[0].data.usageRecords).toHaveLength(1); expect(entries[0].data.reason).toBe("all-models-failed");
+	expect(h.entries.some(e => e.customType === "pi-better-compaction-portable-summary")).toBe(false);
 });
 
 test("cache warming stops for an incompatible model until portable text exists", async () => {

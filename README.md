@@ -27,7 +27,7 @@ Fork-specific improvements include:
 
 ## Releases and branch policy
 
-This source targets **0.7.4-fork.6**, based on community **0.7.4**, with native V2 timeout classification and metadata-only progress diagnostics. The previous verified release/installation is **0.7.4-fork.5** ([acceptance](docs/maintenance/2026-10-30-replay-parity-fork5.md)); preserve it for rollback. Source version, GitHub publication, disk selection and active-session loading are separate facts. Fork releases use `<community-version>-fork.<revision>`.
+This source targets **0.7.4-fork.7**, based on community **0.7.4**, adding verified resumable portable prefixes and cooperative linear-time chunk planning while retaining native V2 diagnostics. Prior fork.6 and earlier immutable releases remain retained for rollback; older runtimes ignore prefix progress and may need full regeneration. Source version, GitHub publication, disk selection and active-session loading are separate facts. Fork releases use `<community-version>-fork.<revision>`.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -36,7 +36,7 @@ This source targets **0.7.4-fork.6**, based on community **0.7.4**, with native 
 Install a reproducible release:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.7
 ```
 
 Verify that the matching Release and checksums exist before installing. [GitHub Releases](https://github.com/chenhaoxiang/pi-better-compaction/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
@@ -46,7 +46,7 @@ Verify that the matching Release and checksums exist before installing. [GitHub 
 Install the maintained fork rather than the similarly named upstream npm package:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.6
+pi install git:github.com/chenhaoxiang/pi-better-compaction@v0.7.4-fork.7
 ```
 
 For reproducible behavior, pin a reviewed commit instead of a moving branch:
@@ -149,6 +149,16 @@ Manual and automatic compaction share the same native-first path. V2 status now 
 An announced or received compaction output without `response.completed` is incomplete: no partial checkpoint is saved and no second native POST is issued. `[DONE]` and `response.incomplete` end the read immediately rather than waiting for HTTP EOF. This does not turn an uncertain billed attempt into a successful checkpoint or guarantee upstream cancellation.
 
 `/compaction-status` shows current transport metadata and at most twelve prior native observations. One context-invisible `pi-better-compaction-native-attempt` entry per returned native operation preserves only closed labels, times, counts and trigger (`manual`/`threshold`/`overflow`) across reload; no prompt, URL, credential, response ID or encrypted blob is recorded. See [diagnostics](docs/compaction-diagnostics.md).
+
+## Recoverable portable prefixes (fork.7)
+
+A completed portable chunk now appends a context-invisible `pi-better-compaction-portable-progress` entry on the existing native branch. A later normal attempt/fresh runtime may reuse it only when the exact native checkpoint, candidate provider/API/model/endpoint, thinking, instructions, chunk policy, complete serialized/raw input prefix and output digest match. Prefixes are never substituted for full business history: remaining chunks must finish before a portable summary can be used. Native checkpoints, actual retained tail and raw history are unchanged. This does not recover cancelled work from older versions that never recorded a prefix.
+
+The optional cache reads at most4096 recent branch entries and retains at most8 candidate checkpoints; each summary is at most1MiB and at most4096 completed chunks are checkpointed. Missing, malformed, out-of-window or changed evidence causes normal safe regeneration, never partial success. Prefix text is private session state, not a public diagnostic or a second history/database. Progress records are not an additional billing source; only actual new-call usage is returned/accounted, including failed manual portable work. Missing or unacknowledged upstream billing remains unknown, not free or refunded.
+
+Chunk preparation sizes messages linearly, yields for native cancellation and rechecks actual serialized chunk size. Large models use the existing conservative half-window bound (with a1MiB payload cap) instead of the old250k cap; accumulated summary plus chunk still must fit the existing safe-input bound. No model, thinking, fallback order, retry worker or global setting changes. A synthetic4000-message fixture covered all input and reduced zero-latency stub calls4→3; CPU timings remain delivery evidence, not real-provider latency, quality, p95 or overall ROI.
+
+Cancellation is cooperative: it stops the chain and keeps successful prefixes, not an unfinished request or a partial native checkpoint. A nonempty streamed fragment is not completion: the production adapter observes the actual SDK stop reason, and caller cancellation/aborted/incomplete output is checked before advancing any prefix; returned usage is retained. Pre-fix candidate progress identities are not reused. A successful local cancel does not prove upstream cancellation/refund. Adoption still requires a normal safe-point runtime transition; do not wake/reload retired or active business sessions to test it.
 
 ## Safety boundaries
 

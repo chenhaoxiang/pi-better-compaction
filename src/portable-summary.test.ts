@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
-import { summarizePortableHistory } from "./portable-summary";
-import { DEFAULT_EXTENSION_CONFIG } from "./types";
+import { generateSummaryWithUsage } from "@earendil-works/pi-coding-agent";
+import { registerApiProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
+import { AssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { isPortableSummaryCheckpoint, portableProgressOptions, PORTABLE_PROGRESS_ENTRY_TYPE, summarizePortableHistory } from "./portable-summary";
+import { DEFAULT_EXTENSION_CONFIG, NATIVE_COMPACTION_FALLBACK_SUMMARY } from "./types";
 
 const mkModel = (provider: string, id: string, contextWindow = 100_000) => ({
 	provider, id, api: "openai-responses", name: id, baseUrl: "https://example.invalid/v1",
@@ -175,6 +178,159 @@ test("reports a failed progress event when the accumulated summary exceeds the s
 		"1/2:start", "1/2:complete",
 		"2/2:failed",
 	]);
+});
+
+test("cancelled portable work resumes only its verified completed prefix without repeating model calls", async () => {
+	const checkpoints: unknown[] = []; const controller = new AbortController(); let firstCalls = 0;
+	const source = [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb"), user("fact-C-cccccccccc")];
+	const base = { messages: source as never, ctx: context() as never, config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" }, maxChunkBytes: 40, checkpointId: "native-1" };
+	const cancelled = await summarizePortableHistory({ ...base, signal: controller.signal,
+		onCheckpoint: value => { checkpoints.push(value); controller.abort(); },
+		generate: async () => ({ text: `prefix-${++firstCalls}` }),
+	});
+	expect(cancelled).toMatchObject({ ok: false, reason: "aborted" }); expect(firstCalls).toBe(1); expect(checkpoints).toHaveLength(1);
+	const seen: Array<{ text: string; prior?: string }> = [];
+	const resumed = await summarizePortableHistory({ ...base, checkpoints: checkpoints as never,
+		generate: async ({ messages, previousSummary }) => { seen.push({ text: JSON.stringify(messages), prior: previousSummary }); return { text: `resumed-${seen.length}` }; },
+	});
+	expect(resumed.ok).toBe(true); expect(seen).toHaveLength(2); expect(seen[0].prior).toBe("prefix-1");
+	expect(seen[0].text).toContain("fact-B"); expect(seen.some(call => call.text.includes("fact-A"))).toBe(false);
+});
+
+test("large-model default planning uses its existing safe half-window bound instead of an arbitrary250k cap", async () => {
+	const big = mkModel("codex-local", "large", 872000); let calls = 0; const seen: string[] = [];
+	const source = Array.from({ length: 12 }, (_, i) => user(`fact-${i}:` + "a".repeat(69000)));
+	const result = await summarizePortableHistory({ messages: source as never,
+		ctx: { ...context(), model: undefined, modelRegistry: { find: () => big, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic" }) } } as never,
+		config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/large" },
+		generate: async ({ messages }) => { calls++; seen.push(JSON.stringify(messages)); return { text: "complete accumulated summary" }; },
+	});
+	expect(result.ok).toBe(true); expect(calls).toBe(2); for (let i = 0; i < 12; i++) expect(seen.some(s => s.includes(`fact-${i}:`))).toBe(true);
+});
+
+test("planning yields to native cancellation before generating on a long history", async () => {
+	const controller = new AbortController(); let calls = 0;
+	const cancel = setImmediate(() => controller.abort());
+	try {
+		const result = await summarizePortableHistory({ messages: Array.from({ length: 1024 }, () => user("small fact")) as never,
+			ctx: context() as never, config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" }, signal: controller.signal,
+			generate: async () => { calls++; return { text: "history" }; },
+		});
+		expect(result).toMatchObject({ ok: false, reason: "aborted" }); expect(calls).toBe(0);
+	} finally { clearImmediate(cancel); }
+});
+
+test("prefix reuse rejects changed history, endpoint, instructions, thinking, checkpoint or corrupted output", async () => {
+	const source = [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb"), user("fact-C-cccccccccc")];
+	const saved: any[] = []; const controller = new AbortController();
+	const base = { messages: source as never, ctx: context() as never, config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" }, checkpointId: "native-1", maxChunkBytes: 40 };
+	await summarizePortableHistory({ ...base, signal: controller.signal, onCheckpoint: value => { saved.push(value); controller.abort(); }, generate: async () => ({ text: "saved-prefix" }) });
+	expect(isPortableSummaryCheckpoint(saved[0])).toBe(true);
+	const changes: any[] = [
+		{ messages: [user("edited-fact-A"), ...source.slice(1)] }, { checkpointId: "native-2" },
+		{ customInstructions: "new guidance" }, { config: { ...base.config, compactionThinkingLevel: "high" } },
+		{ ctx: { ...context(), modelRegistry: { ...context().modelRegistry, find: () => ({ ...kimi, baseUrl: "https://other.invalid/v1" }) } } },
+		{ checkpoints: [{ ...saved[0], summary: "corrupted" }] }, { checkpoints: [{ ...saved[0], version: 2 }] },
+		{ checkpoints: [{ ...saved[0], completedChunks: 9999 }] }, { checkpoints: [{ ...saved[0], prefixDigest: "bad" }] },
+	];
+	for (const change of changes) {
+		const seen: Array<string | undefined> = [];
+		const result = await summarizePortableHistory({ ...base, checkpoints: saved, ...change, generate: async ({ previousSummary }) => { seen.push(previousSummary); return { text: "fresh" }; } });
+		expect(result.ok).toBe(true); expect(seen[0]).toBeUndefined(); expect(seen.length).toBeGreaterThan(1);
+	}
+});
+
+test("append-only tail keeps a matching completed prefix, and cache write failures do not replay requests", async () => {
+	const saved: any[] = []; const controller = new AbortController();
+	const base = { messages: [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb")] as never, ctx: context() as never, config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" }, checkpointId: "native-1", maxChunkBytes: 40 };
+	await summarizePortableHistory({ ...base, signal: controller.signal, onCheckpoint: value => { saved.push(value); controller.abort(); }, generate: async () => ({ text: "A" }) });
+	const seen: string[] = [];
+	const result = await summarizePortableHistory({ ...base, messages: [...base.messages, user("fact-C-cccccccccc")] as never, checkpoints: saved,
+		onCheckpoint: () => { throw new Error("synthetic optional persistence failure"); },
+		generate: async ({ messages }) => { seen.push(JSON.stringify(messages)); return { text: "all facts" }; },
+	});
+	expect(result.ok).toBe(true); expect(seen).toHaveLength(2); expect(seen.join(" ")).not.toContain("fact-A");
+	const branch = saved.map(data => ({ type: "custom", customType: PORTABLE_PROGRESS_ENTRY_TYPE, data }));
+	const options = portableProgressOptions(branch as never, "native-1"); expect(options.checkpoints).toHaveLength(1);
+	expect(portableProgressOptions(branch as never, "other").checkpoints).toHaveLength(0);
+	expect(portableProgressOptions([...branch, { type: "custom", customType: PORTABLE_PROGRESS_ENTRY_TYPE, data: null }] as never, "native-1").checkpoints).toHaveLength(1);
+});
+
+test("a complete cached prefix cannot turn an explicit cancellation or a placeholder into success", async () => {
+	const saved: any[] = []; const base = { messages: [user("fact-A")] as never, ctx: context() as never, config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" }, checkpointId: "native-1" };
+	await summarizePortableHistory({ ...base, onCheckpoint: value => saved.push(value), generate: async () => ({ text: "complete fact-A" }) });
+	const controller = new AbortController(); let calls = 0;
+	const result = await summarizePortableHistory({ ...base, checkpoints: saved, signal: controller.signal, onCandidate: () => controller.abort(), generate: async () => { calls++; return { text: "must not run" }; } });
+	expect(result).toMatchObject({ ok: false, reason: "aborted" }); expect(calls).toBe(0);
+	const invalid = await summarizePortableHistory({ ...base, generate: async () => ({ text: NATIVE_COMPACTION_FALLBACK_SUMMARY }) });
+	expect(invalid.ok).toBe(false);
+});
+
+test.each([[1, 1], [2, 3], [3, 3]])("review: pinned SDK aborted partial chunk %s/%s never advances persisted progress", async (partialChunk, totalChunks) => {
+	const controller = new AbortController(); const saved: any[] = []; let calls = 0; let sdkPartialObserved = false;
+	const usage = { input: 11, output: 3, totalTokens: 14, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+	const source = [user("fact-A-aaaaaaaaaa"), user("fact-B-bbbbbbbbbb"), user("fact-C-cccccccccc")].slice(0, totalChunks);
+	const base = { messages: source as never, ctx: context() as never, config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" }, checkpointId: "native-1", maxChunkBytes: 40 };
+	const result = await summarizePortableHistory({ ...base, signal: controller.signal, onCheckpoint: value => saved.push(value),
+		generate: async input => {
+			calls++;
+			if (calls !== partialChunk) return { text: `complete-${calls}`, usage };
+			const streamFn = () => {
+				const stream = new AssistantMessageEventStream(); controller.abort();
+				const message = { role: "assistant", api: input.model.api, provider: input.model.provider, model: input.model.id, content: [{ type: "text", text: "NONEMPTY_UNFINISHED_PREFIX" }], stopReason: "aborted", usage, timestamp: 1 };
+				stream.push({ type: "error", reason: "aborted", error: message } as never); stream.end(message as never); return stream;
+			};
+			const partial = await generateSummaryWithUsage(input.messages, input.model, input.reserveTokens, "synthetic", undefined, input.signal, undefined, input.previousSummary, input.thinkingLevel, streamFn as never);
+			sdkPartialObserved = partial.text.includes("NONEMPTY_UNFINISHED_PREFIX"); return partial;
+		},
+	});
+	expect(sdkPartialObserved).toBe(true); expect(result).toMatchObject({ ok: false, reason: "aborted" });
+	expect(calls).toBe(partialChunk); expect(result.usageRecords).toHaveLength(partialChunk); expect(saved).toHaveLength(partialChunk - 1);
+	let resumedCalls = 0;
+	const resumed = await summarizePortableHistory({ ...base, checkpoints: saved, generate: async () => { resumedCalls++; return { text: "fresh complete history", usage }; } });
+	expect(resumed.ok).toBe(true); expect(resumedCalls).toBe(totalChunks - partialChunk + 1); if (resumed.ok) expect(resumed.summary).not.toContain("NONEMPTY_UNFINISHED_PREFIX");
+});
+
+test("review: default SDK generator requires a normal stop even without a caller-abort signal", async () => {
+	const sourceId = "portable-partial-api", api = "portable-partial-api"; let calls = 0; const saved: unknown[] = [];
+	const model = { ...kimi, api };
+	const stream = () => { calls++; const result = new AssistantMessageEventStream();
+		const message = { role: "assistant", api, provider: model.provider, model: model.id, content: [{ type: "text", text: "PARTIAL_WITHOUT_CALLER_ABORT" }], stopReason: "aborted", usage: { input: 2, output: 1, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, timestamp: 1 };
+		result.push({ type: "error", reason: "aborted", error: message } as never); result.end(message as never); return result; };
+	registerApiProvider({ api, stream, streamSimple: stream } as never, sourceId);
+	try {
+		const result = await summarizePortableHistory({ messages: [user("only fact")] as never, checkpointId: "native-1", onCheckpoint: value => saved.push(value),
+			ctx: { model: undefined, modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic" }) } } as never,
+			config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" } });
+		expect(result).toMatchObject({ ok: false, reason: "aborted" }); expect(result.usageRecords).toHaveLength(1); expect(calls).toBe(1); expect(saved).toHaveLength(0);
+	} finally { unregisterApiProviders(sourceId); }
+});
+
+test.each(["stop", "length"])("review: default SDK adapter distinguishes complete and token-limited text: %s", async stopReason => {
+	const sourceId = `portable-completion-${stopReason}`, api = sourceId; const saved: unknown[] = []; let calls = 0;
+	const model = { ...kimi, api };
+	const produce = () => { calls++; const stream = new AssistantMessageEventStream();
+		const message = { role: "assistant", api, provider: model.provider, model: model.id, content: [{ type: "text", text: "SUMMARY_TEXT" }], stopReason, usage: { input: 2, output: 1, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, timestamp: 1 };
+		stream.push({ type: "done", reason: stopReason, message } as never); stream.end(message as never); return stream; };
+	registerApiProvider({ api, stream: produce, streamSimple: produce } as never, sourceId);
+	try {
+		const result = await summarizePortableHistory({ messages: [user("only fact")] as never, checkpointId: "native-1", onCheckpoint: value => saved.push(value),
+			ctx: { model: undefined, modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic" }) } } as never,
+			config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" } });
+		expect(result.ok).toBe(stopReason === "stop"); expect(result.usageRecords).toHaveLength(1); expect(calls).toBe(1); expect(saved).toHaveLength(stopReason === "stop" ? 1 : 0);
+	} finally { unregisterApiProviders(sourceId); }
+});
+
+test("review: default SDK setup failure cannot create a prefix or fabricate usage", async () => {
+	const sourceId = "portable-setup-failure", api = sourceId; const saved: unknown[] = []; let calls = 0;
+	const model = { ...kimi, api }; const fail = () => { calls++; throw new Error("synthetic setup failure"); };
+	registerApiProvider({ api, stream: fail, streamSimple: fail } as never, sourceId);
+	try {
+		const result = await summarizePortableHistory({ messages: [user("only fact")] as never, checkpointId: "native-1", onCheckpoint: value => saved.push(value),
+			ctx: { model: undefined, modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic" }) } } as never,
+			config: { ...DEFAULT_EXTENSION_CONFIG, compactionModel: "codex-local/kimi-k3" } });
+		expect(result.ok).toBe(false); expect(result.usageRecords).toHaveLength(0); expect(calls).toBe(1); expect(saved).toHaveLength(0);
+	} finally { unregisterApiProviders(sourceId); }
 });
 
 test("all candidates failing returns an explicit failure without a placeholder or partial success", async () => {
